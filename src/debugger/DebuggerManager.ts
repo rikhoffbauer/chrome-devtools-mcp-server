@@ -5,8 +5,55 @@
  */
 
 import type {Debugger} from 'debug';
-import type {CDPSession, Page} from 'puppeteer-core';
 import type Protocol from 'devtools-protocol';
+import type {CDPSession, Page} from 'puppeteer-core';
+import {SourceMapConsumer, type RawSourceMap} from 'source-map-js';
+
+const DEFAULT_SCRIPT_MIME = 'text/javascript';
+const ORIGINAL_SOURCE_MIME = 'text/plain';
+
+type SourceKind = 'compiled' | 'original';
+
+function toBase64Url(value: string): string {
+  return Buffer.from(value, 'utf-8').toString('base64url');
+}
+
+function fromBase64Url(value: string): string {
+  return Buffer.from(value, 'base64url').toString('utf-8');
+}
+
+function guessMimeType(
+  url?: string,
+  fallback: string = ORIGINAL_SOURCE_MIME,
+): string {
+  if (!url) {
+    return fallback;
+  }
+  const lower = url.toLowerCase();
+  if (lower.endsWith('.ts') || lower.endsWith('.tsx')) {
+    return 'text/typescript';
+  }
+  if (lower.endsWith('.jsx')) {
+    return 'text/jsx';
+  }
+  if (
+    lower.endsWith('.js') ||
+    lower.endsWith('.mjs') ||
+    lower.endsWith('.cjs')
+  ) {
+    return 'text/javascript';
+  }
+  if (lower.endsWith('.json')) {
+    return 'application/json';
+  }
+  if (lower.endsWith('.css')) {
+    return 'text/css';
+  }
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+    return 'text/html';
+  }
+  return fallback;
+}
 
 function formatRemoteObject(value?: Protocol.Runtime.RemoteObject): string {
   if (!value) {
@@ -18,7 +65,11 @@ function formatRemoteObject(value?: Protocol.Runtime.RemoteObject): string {
   if (value.type === 'string') {
     return JSON.stringify(value.value ?? value.description ?? '');
   }
-  if (value.type === 'number' || value.type === 'boolean' || value.type === 'bigint') {
+  if (
+    value.type === 'number' ||
+    value.type === 'boolean' ||
+    value.type === 'bigint'
+  ) {
     if (value.value !== undefined) {
       return String(value.value);
     }
@@ -56,6 +107,8 @@ export interface BreakpointInfo {
     lineNumber: number;
     columnNumber?: number;
     condition?: string;
+    sourceId?: string;
+    originalUrl?: string;
   };
   resolvedLocation?: Protocol.Debugger.Location;
 }
@@ -73,15 +126,58 @@ export interface ScopeDescription {
   variables: Array<{name: string; value: string}>;
 }
 
+export interface PageSourceDescriptor {
+  id: string;
+  kind: SourceKind;
+  scriptId: string;
+  displayName: string;
+  url?: string;
+  originalUrl?: string;
+  mimeType: string;
+}
+
+export interface PageSourceContent {
+  kind: SourceKind;
+  url?: string;
+  mimeType: string;
+  text: string;
+}
+
+interface ScriptSourceRecord {
+  scriptId: string;
+  url?: string;
+  executionContextId?: number;
+  sourceMapUrl?: string;
+  sourceText?: string;
+  sourceTextLoaded?: boolean;
+  sourceMap?: RawSourceMap;
+  sourceMapLoaded?: boolean;
+  originalSources: Map<string, OriginalSourceRecord>;
+}
+
+interface OriginalSourceRecord {
+  id: string;
+  scriptId: string;
+  mapIndex: number;
+  url: string;
+  mimeType: string;
+  content?: string;
+  contentLoaded?: boolean;
+}
+
 export class DebuggerSession {
   #page: Page;
   #logger: Debugger;
   #session?: CDPSession;
   #debuggerEnabled = false;
   #runtimeEnabled = false;
+  #pageDomainEnabled = false;
   #breakpoints = new Map<string, BreakpointInfo>();
   #pausedDetails?: PausedDetails;
   #scriptIdToUrl = new Map<string, string>();
+  #executionContextToFrameId = new Map<number, string>();
+  #scriptSources = new Map<string, ScriptSourceRecord>();
+  #sourcesById = new Map<string, OriginalSourceRecord | ScriptSourceRecord>();
 
   constructor(page: Page, logger: Debugger) {
     this.#page = page;
@@ -102,9 +198,13 @@ export class DebuggerSession {
     this.#session = undefined;
     this.#debuggerEnabled = false;
     this.#runtimeEnabled = false;
+    this.#pageDomainEnabled = false;
     this.#pausedDetails = undefined;
     this.#breakpoints.clear();
     this.#scriptIdToUrl.clear();
+    this.#executionContextToFrameId.clear();
+    this.#scriptSources.clear();
+    this.#sourcesById.clear();
   }
 
   async #ensureSession(): Promise<CDPSession> {
@@ -133,6 +233,19 @@ export class DebuggerSession {
       if (event.url) {
         this.#scriptIdToUrl.set(event.scriptId, event.url);
       }
+      this.#recordScript(event);
+    });
+    this.#session.on('Runtime.executionContextCreated', event => {
+      const frameId = event.context.auxData?.frameId;
+      if (frameId) {
+        this.#executionContextToFrameId.set(event.context.id, frameId);
+      }
+    });
+    this.#session.on('Runtime.executionContextDestroyed', event => {
+      this.#executionContextToFrameId.delete(event.executionContextId);
+    });
+    this.#session.on('Runtime.executionContextsCleared', () => {
+      this.#executionContextToFrameId.clear();
     });
     return this.#session;
   }
@@ -146,6 +259,8 @@ export class DebuggerSession {
     if (!this.#debuggerEnabled) {
       await session.send('Debugger.enable');
       this.#debuggerEnabled = true;
+      this.#scriptSources.clear();
+      this.#sourcesById.clear();
     }
   }
 
@@ -157,6 +272,8 @@ export class DebuggerSession {
     this.#debuggerEnabled = false;
     this.#pausedDetails = undefined;
     this.#breakpoints.clear();
+    this.#scriptSources.clear();
+    this.#sourcesById.clear();
   }
 
   isEnabled(): boolean {
@@ -176,22 +293,46 @@ export class DebuggerSession {
   }
 
   async setBreakpoint(options: {
-    url: string;
+    url?: string;
+    sourceId?: string;
     lineNumber: number;
     columnNumber?: number;
     condition?: string;
   }): Promise<BreakpointInfo> {
-    if (!options.url) {
-      throw new Error('A script URL is required to set a breakpoint.');
+    if (!options.url && !options.sourceId) {
+      throw new Error('Provide a script URL or sourceId to set a breakpoint.');
     }
     await this.start();
     const session = await this.#ensureSession();
+    let targetUrl = options.url;
+    let lineNumber = options.lineNumber;
+    let columnNumber = options.columnNumber;
+    let originalUrl: string | undefined;
+
+    if (options.sourceId) {
+      const mapped = await this.#mapOriginalLocation(
+        options.sourceId,
+        options.lineNumber,
+        options.columnNumber,
+      );
+      targetUrl = mapped.url;
+      lineNumber = mapped.lineNumber;
+      columnNumber = mapped.columnNumber;
+      originalUrl = mapped.originalUrl;
+    }
+
+    if (!targetUrl) {
+      throw new Error('Failed to resolve a script URL for the breakpoint.');
+    }
+
     const params: Protocol.Debugger.SetBreakpointByUrlRequest = {
-      url: options.url,
-      lineNumber: Math.max(0, options.lineNumber - 1),
+      url: targetUrl,
+      lineNumber: Math.max(0, lineNumber - 1),
     };
     if (options.columnNumber !== undefined) {
-      params.columnNumber = Math.max(0, options.columnNumber - 1);
+      params.columnNumber = Math.max(0, columnNumber! - 1);
+    } else if (columnNumber !== undefined) {
+      params.columnNumber = Math.max(0, columnNumber - 1);
     }
     if (options.condition) {
       params.condition = options.condition;
@@ -200,7 +341,14 @@ export class DebuggerSession {
     const result = await session.send('Debugger.setBreakpointByUrl', params);
     const info: BreakpointInfo = {
       breakpointId: result.breakpointId,
-      requested: {...options},
+      requested: {
+        url: targetUrl,
+        lineNumber,
+        columnNumber,
+        condition: options.condition,
+        sourceId: options.sourceId,
+        originalUrl,
+      },
       resolvedLocation: result.locations[0],
     };
     this.#breakpoints.set(info.breakpointId, info);
@@ -219,14 +367,22 @@ export class DebuggerSession {
   }
 
   async removeBreakpointsByLocation(options: {
-    url: string;
+    url?: string;
+    sourceId?: string;
     lineNumber: number;
     columnNumber?: number;
   }): Promise<string[]> {
     await this.start();
     const toRemove: string[] = [];
     for (const [breakpointId, info] of this.#breakpoints.entries()) {
-      if (info.requested.url !== options.url) {
+      if (options.sourceId && info.requested.sourceId !== options.sourceId) {
+        continue;
+      }
+      if (
+        !options.sourceId &&
+        options.url &&
+        info.requested.url !== options.url
+      ) {
         continue;
       }
       if (info.requested.lineNumber !== options.lineNumber) {
@@ -377,6 +533,350 @@ export class DebuggerSession {
           ? location.columnNumber + 1
           : undefined,
     };
+  }
+
+  async listSources(): Promise<PageSourceDescriptor[]> {
+    await this.start();
+    await this.#ensureSession();
+    const descriptors: PageSourceDescriptor[] = [];
+    for (const record of this.#scriptSources.values()) {
+      descriptors.push(this.#describeCompiledSource(record));
+      await this.#ensureSourceMap(record);
+      for (const original of record.originalSources.values()) {
+        descriptors.push(this.#describeOriginalSource(record, original));
+      }
+    }
+    return descriptors;
+  }
+
+  async getSourceContent(sourceId: string): Promise<PageSourceContent> {
+    await this.start();
+    await this.#ensureSession();
+    const descriptor = this.#sourcesById.get(sourceId);
+    if (!descriptor) {
+      throw new Error(`Unknown source ${sourceId}`);
+    }
+    if ('mapIndex' in descriptor) {
+      const scriptRecord = this.#scriptSources.get(descriptor.scriptId);
+      if (!scriptRecord) {
+        throw new Error(`Script ${descriptor.scriptId} no longer available.`);
+      }
+      const text = await this.#loadOriginalSourceText(scriptRecord, descriptor);
+      return {
+        kind: 'original',
+        url: descriptor.url,
+        mimeType: descriptor.mimeType,
+        text,
+      };
+    }
+    const scriptRecord = descriptor;
+    const text = await this.#loadCompiledSourceText(scriptRecord);
+    return {
+      kind: 'compiled',
+      url: scriptRecord.url,
+      mimeType: guessMimeType(scriptRecord.url, DEFAULT_SCRIPT_MIME),
+      text,
+    };
+  }
+
+  #describeCompiledSource(record: ScriptSourceRecord): PageSourceDescriptor {
+    const id = this.#compiledSourceId(record.scriptId);
+    this.#sourcesById.set(id, record);
+    const displayName = record.url ?? `<anonymous script ${record.scriptId}>`;
+    return {
+      id,
+      kind: 'compiled',
+      scriptId: record.scriptId,
+      displayName,
+      url: record.url,
+      mimeType: guessMimeType(record.url, DEFAULT_SCRIPT_MIME),
+    };
+  }
+
+  #describeOriginalSource(
+    record: ScriptSourceRecord,
+    original: OriginalSourceRecord,
+  ): PageSourceDescriptor {
+    this.#sourcesById.set(original.id, original);
+    return {
+      id: original.id,
+      kind: 'original',
+      scriptId: record.scriptId,
+      displayName: original.url,
+      url: record.url,
+      originalUrl: original.url,
+      mimeType: original.mimeType,
+    };
+  }
+
+  async #loadCompiledSourceText(record: ScriptSourceRecord): Promise<string> {
+    if (record.sourceTextLoaded && record.sourceText !== undefined) {
+      return record.sourceText;
+    }
+    const session = await this.#ensureSession();
+    const result = await session.send('Debugger.getScriptSource', {
+      scriptId: record.scriptId,
+    });
+    record.sourceText = result.scriptSource ?? '';
+    record.sourceTextLoaded = true;
+    return record.sourceText;
+  }
+
+  async #loadOriginalSourceText(
+    record: ScriptSourceRecord,
+    original: OriginalSourceRecord,
+  ): Promise<string> {
+    if (original.contentLoaded && original.content !== undefined) {
+      return original.content;
+    }
+    const sourceMap = await this.#ensureSourceMap(record);
+    if (!sourceMap) {
+      throw new Error('Source map data unavailable for original source.');
+    }
+    if (sourceMap.sourcesContent?.[original.mapIndex]) {
+      original.content = sourceMap.sourcesContent[original.mapIndex] ?? '';
+      original.contentLoaded = true;
+      return original.content;
+    }
+    const content = await this.#fetchResourceContent(
+      record,
+      sourceMap,
+      original.url,
+    );
+    original.content = content;
+    original.contentLoaded = true;
+    return content;
+  }
+
+  async #mapOriginalLocation(
+    sourceId: string,
+    lineNumber: number,
+    columnNumber?: number,
+  ): Promise<{
+    url: string;
+    lineNumber: number;
+    columnNumber?: number;
+    originalUrl?: string;
+  }> {
+    const descriptor = this.#sourcesById.get(sourceId);
+    if (!descriptor || !('mapIndex' in descriptor)) {
+      throw new Error(`Source ${sourceId} is not an original source.`);
+    }
+    const scriptRecord = this.#scriptSources.get(descriptor.scriptId);
+    if (!scriptRecord) {
+      throw new Error(`Script ${descriptor.scriptId} not found for mapping.`);
+    }
+    const sourceMap = await this.#ensureSourceMap(scriptRecord);
+    if (!sourceMap) {
+      throw new Error('No source map available to resolve original location.');
+    }
+    const scriptUrl = scriptRecord.url;
+    if (!scriptUrl) {
+      throw new Error('Cannot resolve generated URL for anonymous script.');
+    }
+
+    const consumer = new SourceMapConsumer(sourceMap);
+    const generated = consumer.generatedPositionFor({
+      source: consumer.sources[descriptor.mapIndex]!,
+      line: lineNumber,
+      column: columnNumber !== undefined ? Math.max(columnNumber - 1, 0) : 0,
+      bias: SourceMapConsumer.GREATEST_LOWER_BOUND,
+    });
+
+    if (!generated || generated.line === null) {
+      throw new Error('Could not map requested location to generated code.');
+    }
+
+    return {
+      url: scriptUrl,
+      lineNumber: generated.line,
+      columnNumber:
+        generated.column !== null && generated.column !== undefined
+          ? generated.column + 1
+          : undefined,
+      originalUrl: descriptor.url,
+    };
+  }
+
+  async #fetchResourceContent(
+    record: ScriptSourceRecord,
+    sourceMap: RawSourceMap | undefined,
+    url: string,
+  ): Promise<string> {
+    const session = await this.#ensureSession();
+    const frameId = record.executionContextId
+      ? this.#executionContextToFrameId.get(record.executionContextId)
+      : undefined;
+    const resolvedUrl = this.#resolveSourceUrl(sourceMap, record.url, url);
+    try {
+      if (!this.#pageDomainEnabled) {
+        await session.send('Page.enable');
+        this.#pageDomainEnabled = true;
+      }
+      if (!frameId) {
+        throw new Error('Frame id unavailable to fetch resource content.');
+      }
+      const result = await session.send('Page.getResourceContent', {
+        frameId,
+        url: resolvedUrl,
+      });
+      if (result.base64Encoded) {
+        return Buffer.from(result.content, 'base64').toString('utf-8');
+      }
+      return result.content;
+    } catch (error) {
+      this.#logger(
+        `Failed to fetch content for ${resolvedUrl}: ${String(error)}`,
+      );
+      throw new Error(
+        `Unable to retrieve source content for ${resolvedUrl}. Ensure the file is accessible to the browser context.`,
+      );
+    }
+  }
+
+  #resolveSourceUrl(
+    sourceMap: RawSourceMap | undefined,
+    scriptUrl: string | undefined,
+    sourceUrl: string,
+  ): string {
+    try {
+      if (sourceUrl.startsWith('data:')) {
+        return sourceUrl;
+      }
+      if (sourceUrl.includes('://')) {
+        return sourceUrl;
+      }
+      if (sourceMap?.sourceRoot) {
+        return new URL(sourceUrl, sourceMap.sourceRoot).toString();
+      }
+      if (scriptUrl) {
+        return new URL(sourceUrl, scriptUrl).toString();
+      }
+    } catch (error) {
+      this.#logger(
+        `Failed to resolve source URL ${sourceUrl}: ${String(error)}`,
+      );
+    }
+    return sourceUrl;
+  }
+
+  async #ensureSourceMap(
+    record: ScriptSourceRecord,
+  ): Promise<RawSourceMap | undefined> {
+    if (!record.sourceMapUrl) {
+      return undefined;
+    }
+    if (record.sourceMapLoaded && record.sourceMap) {
+      return record.sourceMap;
+    }
+    const mapText = await this.#loadSourceMapText(record);
+    if (!mapText) {
+      record.sourceMapLoaded = true;
+      return undefined;
+    }
+    try {
+      const parsed: RawSourceMap = JSON.parse(mapText);
+      record.sourceMap = parsed;
+      record.sourceMapLoaded = true;
+      record.originalSources = new Map(
+        parsed.sources.map((sourceUrl, index) => {
+          const resolvedUrl = this.#resolveSourceUrl(
+            parsed,
+            record.url,
+            sourceUrl,
+          );
+          const id = this.#originalSourceId(record.scriptId, resolvedUrl);
+          return [
+            id,
+            {
+              id,
+              scriptId: record.scriptId,
+              mapIndex: index,
+              url: resolvedUrl,
+              mimeType: guessMimeType(resolvedUrl),
+            },
+          ];
+        }),
+      );
+      return parsed;
+    } catch (error) {
+      this.#logger(`Failed to parse source map: ${String(error)}`);
+      record.sourceMapLoaded = true;
+      return undefined;
+    }
+  }
+
+  async #loadSourceMapText(
+    record: ScriptSourceRecord,
+  ): Promise<string | undefined> {
+    const url = record.sourceMapUrl;
+    if (!url) {
+      return undefined;
+    }
+    if (url.startsWith('data:')) {
+      try {
+        const commaIdx = url.indexOf(',');
+        if (commaIdx === -1) {
+          return undefined;
+        }
+        const metadata = url.substring(5, commaIdx);
+        const data = url.substring(commaIdx + 1);
+        if (metadata.includes('base64')) {
+          return Buffer.from(data, 'base64').toString('utf-8');
+        }
+        return decodeURIComponent(data);
+      } catch (error) {
+        this.#logger(`Failed to decode inline source map: ${String(error)}`);
+        return undefined;
+      }
+    }
+    try {
+      const sourceMapUrl = record.url
+        ? new URL(url, record.url).toString()
+        : url;
+      return await this.#fetchResourceContent(record, undefined, sourceMapUrl);
+    } catch (error) {
+      this.#logger(`Failed to download source map: ${String(error)}`);
+      return undefined;
+    }
+  }
+
+  #recordScript(event: Protocol.Debugger.ScriptParsedEvent): void {
+    const existing: ScriptSourceRecord = {
+      scriptId: event.scriptId,
+      url: event.url || undefined,
+      executionContextId: event.executionContextId,
+      sourceMapUrl: event.sourceMapURL || undefined,
+      originalSources: new Map(),
+    };
+    this.#scriptSources.set(event.scriptId, existing);
+  }
+
+  #compiledSourceId(scriptId: string): string {
+    return `compiled:${scriptId}`;
+  }
+
+  #originalSourceId(scriptId: string, sourceUrl: string): string {
+    return `original:${scriptId}:${toBase64Url(sourceUrl)}`;
+  }
+
+  decodeSourceId(sourceId: string): {
+    kind: SourceKind;
+    scriptId: string;
+    sourceUrl?: string;
+  } {
+    const [kind, scriptId, encodedUrl] = sourceId.split(':', 3);
+    if (kind === 'compiled') {
+      return {kind: 'compiled', scriptId};
+    }
+    if (kind === 'original' && encodedUrl) {
+      return {
+        kind: 'original',
+        scriptId,
+        sourceUrl: fromBase64Url(encodedUrl),
+      };
+    }
+    throw new Error(`Invalid source identifier: ${sourceId}`);
   }
 }
 

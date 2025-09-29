@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type {
+  Resource,
+  TextResourceContents,
+} from '@modelcontextprotocol/sdk/types.js';
 import type {Dialog, ElementHandle, Page} from 'puppeteer-core';
 import type z from 'zod';
 
@@ -77,6 +81,9 @@ export type Context = Readonly<{
   ): Promise<{filename: string}>;
   waitForEventsAfterAction(action: () => Promise<unknown>): Promise<void>;
   getDebuggerSession(): DebuggerSession;
+  listPageSourceResources(): Promise<Resource[]>;
+  readPageSource(uri: string): Promise<TextResourceContents>;
+  validateSourceUriForSelectedPage(uri: string): string;
 }>;
 
 export function defineTool<Schema extends z.ZodRawShape>(

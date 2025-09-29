@@ -7,6 +7,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import type {
+  Resource,
+  TextResourceContents,
+} from '@modelcontextprotocol/sdk/types.js';
 import type {Debugger} from 'debug';
 import type {
   Browser,
@@ -19,7 +23,15 @@ import type {
   PredefinedNetworkConditions,
 } from 'puppeteer-core';
 
-import {DebuggerManager} from './debugger/DebuggerManager.js';
+import {
+  DebuggerManager,
+  type PageSourceContent,
+  type PageSourceDescriptor,
+} from './debugger/DebuggerManager.js';
+import {
+  buildPageSourceUri,
+  parsePageSourceUri,
+} from './debugger/pageSourceUris.js';
 import {NetworkCollector, PageCollector} from './PageCollector.js';
 import {listPages} from './tools/pages.js';
 import {CLOSE_PAGE_ERROR} from './tools/ToolDefinition.js';
@@ -390,5 +402,74 @@ export class McpContext implements Context {
   getDebuggerSession() {
     const page = this.getSelectedPage();
     return this.#debuggerManager.getSession(page);
+  }
+
+  async listPageSourceResources(): Promise<Resource[]> {
+    await this.createPagesSnapshot();
+    const resources: Resource[] = [];
+    const pages = this.getPages();
+    for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
+      const page = pages[pageIndex];
+      const session = this.#debuggerManager.getSession(page);
+      const sources = await session.listSources();
+      for (const source of sources) {
+        resources.push(this.#toResourceDescriptor(pageIndex, source));
+      }
+    }
+    return resources;
+  }
+
+  async readPageSource(uri: string): Promise<TextResourceContents> {
+    const {pageIndex, sourceId} = parsePageSourceUri(uri);
+    await this.createPagesSnapshot();
+    const page = this.getPageByIdx(pageIndex);
+    const session = this.#debuggerManager.getSession(page);
+    const content = await session.getSourceContent(sourceId);
+    return this.#toResourceContent(uri, content);
+  }
+
+  validateSourceUriForSelectedPage(uri: string): string {
+    const {pageIndex, sourceId} = parsePageSourceUri(uri);
+    if (pageIndex !== this.getSelectedPageIdx()) {
+      throw new Error(
+        `The resource ${uri} targets page index ${pageIndex}, but page ${this.getSelectedPageIdx()} is selected. Call select_page first.`,
+      );
+    }
+    return sourceId;
+  }
+
+  #toResourceDescriptor(
+    pageIndex: number,
+    source: PageSourceDescriptor,
+  ): Resource {
+    const uri = buildPageSourceUri(pageIndex, source.id);
+    const namePrefix = source.kind === 'original' ? 'Original' : 'Compiled';
+    const title = `${namePrefix}: ${source.displayName}`;
+    const descriptionParts = [];
+    if (source.kind === 'original' && source.originalUrl) {
+      descriptionParts.push(`Mapped from ${source.url ?? 'anonymous bundle'}.`);
+    }
+    if (source.kind === 'compiled' && source.url) {
+      descriptionParts.push('Compiled JavaScript resource.');
+    }
+    const description = descriptionParts.join(' ');
+    return {
+      name: `${pageIndex}-${source.id}`,
+      title,
+      uri,
+      description: description || undefined,
+      mimeType: source.mimeType,
+    };
+  }
+
+  #toResourceContent(
+    uri: string,
+    content: PageSourceContent,
+  ): TextResourceContents {
+    return {
+      uri,
+      mimeType: content.mimeType,
+      text: content.text,
+    };
   }
 }

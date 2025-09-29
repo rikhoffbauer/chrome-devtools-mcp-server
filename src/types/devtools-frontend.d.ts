@@ -14,6 +14,6 @@ declare module '../../../../testing/TraceLoader.js' {
 }
 
 declare namespace Mocha {
-  interface Suite {}
-  interface Context {}
+  type Suite = Record<string, unknown>;
+  type Context = Record<string, unknown>;
 }

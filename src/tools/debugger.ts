@@ -31,7 +31,8 @@ function formatLocation(location: {
 
 export const startDebuggerSession = defineTool({
   name: 'debugger_start_session',
-  description: `Enable the Chrome DevTools debugger on the currently selected page.`,
+  description:
+    'Enable the Chrome DevTools debugger on the selected page so you can manage breakpoints, expose page sources, and inspect execution state. Run this before listing resources or installing breakpoints.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: true,
@@ -46,7 +47,8 @@ export const startDebuggerSession = defineTool({
 
 export const stopDebuggerSession = defineTool({
   name: 'debugger_stop_session',
-  description: `Disable the Chrome DevTools debugger on the selected page and clear breakpoints.`,
+  description:
+    'Disable the debugger on the selected page and clear all breakpoints. Use this after finishing a debugging session to avoid unexpected pauses.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: true,
@@ -61,13 +63,23 @@ export const stopDebuggerSession = defineTool({
 
 export const setBreakpoint = defineTool({
   name: 'debugger_set_breakpoint',
-  description: `Set a breakpoint by URL and line number on the selected page.`,
+  description:
+    'Install a breakpoint on the selected page using either a compiled script URL or a `sourceUri` from the `page-sources` resource. Typical flow: `debugger_start_session` -> inspect the source list -> call `debugger_set_breakpoint` -> trigger an action such as `click` -> read pause state with `debugger_get_status`.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: false,
   },
   schema: {
-    url: z.string().describe('Absolute or relative script URL to match.'),
+    url: z
+      .string()
+      .optional()
+      .describe('Absolute or relative compiled script URL to match.'),
+    sourceUri: z
+      .string()
+      .optional()
+      .describe(
+        'Resource URI from page-sources pointing at an original (source-mapped) file.',
+      ),
     lineNumber: z
       .number()
       .int()
@@ -88,53 +100,65 @@ export const setBreakpoint = defineTool({
   },
   handler: async (request, response, context) => {
     const session = context.getDebuggerSession();
+    const {url, sourceUri, lineNumber, columnNumber, condition} =
+      request.params;
+    if (!url && !sourceUri) {
+      throw new Error(
+        'Provide either url or sourceUri when setting a breakpoint.',
+      );
+    }
+    let sourceId: string | undefined;
+    if (sourceUri) {
+      sourceId = context.validateSourceUriForSelectedPage(sourceUri);
+    }
     const breakpoint = await session.setBreakpoint({
-      url: request.params.url,
-      lineNumber: request.params.lineNumber,
-      columnNumber: request.params.columnNumber,
-      condition: request.params.condition,
+      url: url ?? undefined,
+      sourceId,
+      lineNumber,
+      columnNumber,
+      condition,
     });
     const location = session.resolveLocation(breakpoint.resolvedLocation);
+    const requestedLocation = sourceUri
+      ? `${sourceUri} line ${lineNumber}${columnNumber ? `:${columnNumber}` : ''}`
+      : `${url} line ${lineNumber}${columnNumber ? `:${columnNumber}` : ''}`;
     response.appendResponseLine(
-      `Breakpoint ${breakpoint.breakpointId} set at ${formatLocation(location)}.`,
+      `Breakpoint ${breakpoint.breakpointId} set for ${requestedLocation}. Actual location: ${formatLocation(location)}.`,
     );
   },
 });
 
 const removeBreakpointParamsSchema = z.object({
-    breakpointId: z
-      .string()
-      .optional()
-      .describe('Breakpoint identifier returned by debugger_set_breakpoint.'),
-    url: z
-      .string()
-      .optional()
-      .describe('Script URL used when the breakpoint was created.'),
-    lineNumber: z
-      .number()
-      .int()
-      .min(1)
-      .optional()
-      .describe('1-based line number used when the breakpoint was created.'),
-    columnNumber: z
-      .number()
-      .int()
-      .min(1)
-      .optional()
-      .describe('1-based column number used when the breakpoint was created.'),
-  });
-
-const removeBreakpointSchema = removeBreakpointParamsSchema.refine(
-  value => Boolean(value.breakpointId) || (value.url && value.lineNumber),
-  {
-    message:
-      'Provide a breakpointId or both url and lineNumber to remove a breakpoint.',
-  },
-);
+  breakpointId: z
+    .string()
+    .optional()
+    .describe('Breakpoint identifier returned by debugger_set_breakpoint.'),
+  url: z
+    .string()
+    .optional()
+    .describe('Compiled script URL used when the breakpoint was created.'),
+  sourceUri: z
+    .string()
+    .optional()
+    .describe('Source resource URI returned by page-sources.'),
+  lineNumber: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe('1-based line number used when the breakpoint was created.'),
+  columnNumber: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe('1-based column number used when the breakpoint was created.'),
+});
 
 export const removeBreakpoint = defineTool({
   name: 'debugger_remove_breakpoint',
-  description: `Remove a breakpoint by its id or by URL and line number.`,
+  description:
+    'Remove a breakpoint by its id, by the compiled URL/line, or by the original `sourceUri`. Pair this with `debugger_list_breakpoints` to keep the pause plan tidy.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: false,
@@ -142,7 +166,7 @@ export const removeBreakpoint = defineTool({
   schema: removeBreakpointParamsSchema.shape,
   handler: async (request, response, context) => {
     const session = context.getDebuggerSession();
-    const params = removeBreakpointSchema.parse(request.params);
+    const params = removeBreakpointParamsSchema.parse(request.params);
 
     if (params.breakpointId) {
       const removed = await session.removeBreakpointById(params.breakpointId);
@@ -152,32 +176,50 @@ export const removeBreakpoint = defineTool({
         );
         return;
       }
-      response.appendResponseLine(
-        `Removed breakpoint ${params.breakpointId}.`,
-      );
+      response.appendResponseLine(`Removed breakpoint ${params.breakpointId}.`);
       return;
     }
 
+    if (!params.url && !params.sourceUri) {
+      throw new Error(
+        'Provide breakpointId, or specify sourceUri or url with a lineNumber to remove a breakpoint.',
+      );
+    }
+    if (params.lineNumber === undefined) {
+      throw new Error(
+        'lineNumber is required when removing by url or sourceUri.',
+      );
+    }
+    let sourceId: string | undefined;
+    if (params.sourceUri) {
+      sourceId = context.validateSourceUriForSelectedPage(params.sourceUri);
+    }
     const removed = await session.removeBreakpointsByLocation({
-      url: params.url!,
-      lineNumber: params.lineNumber!,
+      url: params.url,
+      sourceId,
+      lineNumber: params.lineNumber,
       columnNumber: params.columnNumber,
     });
     if (!removed.length) {
-      response.appendResponseLine(
-        `No breakpoint found at ${params.url}:${params.lineNumber}.`,
-      );
+      const locationText = params.sourceUri
+        ? params.sourceUri
+        : `${params.url}:${params.lineNumber}`;
+      response.appendResponseLine(`No breakpoint found at ${locationText}.`);
       return;
     }
+    const locationText = params.sourceUri
+      ? params.sourceUri
+      : `${params.url}:${params.lineNumber}`;
     response.appendResponseLine(
-      `Removed ${removed.length} breakpoint(s) at ${params.url}:${params.lineNumber}.`,
+      `Removed ${removed.length} breakpoint(s) at ${locationText}.`,
     );
   },
 });
 
 export const listBreakpoints = defineTool({
   name: 'debugger_list_breakpoints',
-  description: `List all breakpoints registered for the selected page.`,
+  description:
+    'List all breakpoints on the selected page, highlighting whether each targets a compiled URL or an original `sourceUri`. Run this after adding or removing breakpoints to confirm your debug plan.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: true,
@@ -194,10 +236,20 @@ export const listBreakpoints = defineTool({
     response.appendResponseLine('Current breakpoints:');
     for (const breakpoint of breakpoints) {
       const location = session.resolveLocation(breakpoint.resolvedLocation);
+      const requestedParts: string[] = [];
+      if (breakpoint.requested.sourceId) {
+        requestedParts.push(
+          `sourceUri ${breakpoint.requested.originalUrl ?? breakpoint.requested.sourceId}`,
+        );
+      } else {
+        requestedParts.push(`url ${breakpoint.requested.url}`);
+      }
+      requestedParts.push(`line ${breakpoint.requested.lineNumber}`);
+      if (breakpoint.requested.columnNumber) {
+        requestedParts.push(`column ${breakpoint.requested.columnNumber}`);
+      }
       response.appendResponseLine(
-        `- ${breakpoint.breakpointId}: requested ${breakpoint.requested.url}:${breakpoint.requested.lineNumber}` +
-          `${breakpoint.requested.columnNumber ? `:${breakpoint.requested.columnNumber}` : ''}` +
-          `, actual ${formatLocation(location)}`,
+        `- ${breakpoint.breakpointId}: ${requestedParts.join(', ')} -> actual ${formatLocation(location)}`,
       );
       if (breakpoint.requested.condition) {
         response.appendResponseLine(
@@ -210,7 +262,8 @@ export const listBreakpoints = defineTool({
 
 export const pauseDebugger = defineTool({
   name: 'debugger_pause',
-  description: `Pause JavaScript execution on the selected page.`,
+  description:
+    'Pause JavaScript execution on the selected page immediately. Helpful after setting breakpoints when you want to inspect state without waiting for user interaction or before calling `debugger_get_status`.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: false,
@@ -219,13 +272,16 @@ export const pauseDebugger = defineTool({
   handler: async (_request, response, context) => {
     const session = context.getDebuggerSession();
     await session.pause();
-    response.appendResponseLine('Pause requested. Execution will stop at the next statement.');
+    response.appendResponseLine(
+      'Pause requested. Execution will stop at the next statement.',
+    );
   },
 });
 
 export const resumeDebugger = defineTool({
   name: 'debugger_resume',
-  description: `Resume JavaScript execution after a pause.`,
+  description:
+    'Resume JavaScript execution after a pause. Combine with `debugger_step_over`, `debugger_step_into`, and `debugger_step_out` to control execution flow once a breakpoint hits.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: false,
@@ -240,7 +296,8 @@ export const resumeDebugger = defineTool({
 
 export const stepOver = defineTool({
   name: 'debugger_step_over',
-  description: `Advance execution to the next statement, stepping over function calls.`,
+  description:
+    'When paused, run the current statement and pause on the next line in the same frame. Use this after reviewing locals with `debugger_get_scopes` when you want to stay in the current function.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: false,
@@ -255,7 +312,8 @@ export const stepOver = defineTool({
 
 export const stepInto = defineTool({
   name: 'debugger_step_into',
-  description: `Step into the next function call from the current pause location.`,
+  description:
+    'When paused, enter the next function call and pause at its first line. Ideal when the current stack shows a call you need to inspect more deeply.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: false,
@@ -270,7 +328,8 @@ export const stepInto = defineTool({
 
 export const stepOut = defineTool({
   name: 'debugger_step_out',
-  description: `Run execution until the current function returns.`,
+  description:
+    'Run execution until the current function returns and pause at the caller. Use this to exit a callee after finishing your inspection.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: false,
@@ -285,7 +344,8 @@ export const stepOut = defineTool({
 
 export const debuggerStatus = defineTool({
   name: 'debugger_get_status',
-  description: `Show debugger state, including pause reason and call stack when paused.`,
+  description:
+    'Summarize whether the debugger is running or paused, why execution stopped, and the current call stack. Run this immediately after triggering a breakpoint (for example: `debugger_set_breakpoint` -> `click` -> `debugger_get_status`) to choose which frame to inspect next.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: true,
@@ -339,12 +399,15 @@ const callFrameIndexSchema = z.object({
     .number()
     .int()
     .min(0)
-    .describe('Index of the call frame to inspect, as shown in debugger_get_status.'),
+    .describe(
+      'Index of the call frame to inspect, as shown in debugger_get_status.',
+    ),
 });
 
 export const debuggerScopes = defineTool({
   name: 'debugger_get_scopes',
-  description: `List scope variables for a specific call frame while paused.`,
+  description:
+    'List scope variables for a call frame reported by `debugger_get_status`. Use this before stepping with `debugger_step_over` or evaluating expressions to understand available bindings.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: true,
@@ -354,7 +417,9 @@ export const debuggerScopes = defineTool({
     const session = context.getDebuggerSession();
     const details = session.getPausedDetails();
     if (!details) {
-      throw new Error('Debugger is not paused. Call debugger_get_status first.');
+      throw new Error(
+        'Debugger is not paused. Call debugger_get_status first.',
+      );
     }
     const callFrame = details.callFrames[request.params.callFrameIndex];
     if (!callFrame) {
@@ -368,9 +433,7 @@ export const debuggerScopes = defineTool({
       return;
     }
     for (const scope of scopes) {
-      response.appendResponseLine(
-        `Scope ${scope.name} (${scope.type}):`,
-      );
+      response.appendResponseLine(`Scope ${scope.name} (${scope.type}):`);
       if (!scope.variables.length) {
         response.appendResponseLine('  <no enumerable bindings>');
         continue;
@@ -384,7 +447,8 @@ export const debuggerScopes = defineTool({
 
 export const evaluateOnCallFrame = defineTool({
   name: 'debugger_evaluate_expression',
-  description: `Evaluate a JavaScript expression in the context of a paused call frame.`,
+  description:
+    'Evaluate a JavaScript expression inside a paused call frame. Combine with `debugger_get_status` (to choose a frame) and `debugger_get_scopes` (to discover variable names) for targeted diagnostics.',
   annotations: {
     category: ToolCategories.DEBUGGING,
     readOnlyHint: false,
@@ -394,13 +458,17 @@ export const evaluateOnCallFrame = defineTool({
     expression: z
       .string()
       .min(1)
-      .describe('JavaScript expression to evaluate in the selected call frame.'),
+      .describe(
+        'JavaScript expression to evaluate in the selected call frame.',
+      ),
   },
   handler: async (request, response, context) => {
     const session = context.getDebuggerSession();
     const details = session.getPausedDetails();
     if (!details) {
-      throw new Error('Debugger is not paused. Call debugger_get_status first.');
+      throw new Error(
+        'Debugger is not paused. Call debugger_get_status first.',
+      );
     }
     const callFrame = details.callFrames[request.params.callFrameIndex];
     if (!callFrame) {

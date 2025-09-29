@@ -8,7 +8,10 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
+import {
+  McpServer,
+  ResourceTemplate,
+} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
 import type {CallToolResult} from '@modelcontextprotocol/sdk/types.js';
 import {SetLevelRequestSchema} from '@modelcontextprotocol/sdk/types.js';
@@ -155,6 +158,32 @@ const tools = [
 for (const tool of tools) {
   registerTool(tool as unknown as ToolDefinition);
 }
+
+const pageSourceTemplate = new ResourceTemplate(
+  'chrome-devtools://pages/{pageIndex}/sources/{sourceId}',
+  {
+    list: async () => {
+      const context = await getContext();
+      const resources = await context.listPageSourceResources();
+      return {resources};
+    },
+  },
+);
+
+server.registerResource(
+  'page-sources',
+  pageSourceTemplate,
+  {
+    title: 'Page source files',
+    description:
+      'Compiled bundles and original (source-mapped) files discovered on each open page.',
+  },
+  async (uri, _variables) => {
+    const context = await getContext();
+    const contents = await context.readPageSource(uri.toString());
+    return {contents: [contents]};
+  },
+);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
