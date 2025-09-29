@@ -35,7 +35,7 @@ export const startDebuggerSession = defineTool({
     'Enable the Chrome DevTools debugger on the selected page so you can manage breakpoints, expose page sources, and inspect execution state. Run this before listing resources or installing breakpoints.',
   annotations: {
     category: ToolCategories.DEBUGGING,
-    readOnlyHint: true,
+    readOnlyHint: false,
   },
   schema: {},
   handler: async (_request, response, context) => {
@@ -51,7 +51,7 @@ export const stopDebuggerSession = defineTool({
     'Disable the debugger on the selected page and clear all breakpoints. Use this after finishing a debugging session to avoid unexpected pauses.',
   annotations: {
     category: ToolCategories.DEBUGGING,
-    readOnlyHint: true,
+    readOnlyHint: false,
   },
   schema: {},
   handler: async (_request, response, context) => {

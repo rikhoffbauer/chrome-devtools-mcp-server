@@ -25,6 +25,7 @@ import type {
 
 import {
   DebuggerManager,
+  type DebuggerSession,
   type PageSourceContent,
   type PageSourceDescriptor,
 } from './debugger/DebuggerManager.js';
@@ -359,9 +360,9 @@ export class McpContext implements Context {
       );
       const filename = path.join(
         dir,
-        mimeType == 'image/png' ? `screenshot.png` : 'screenshot.jpg',
+        mimeType === 'image/png' ? 'screenshot.png' : 'screenshot.jpg',
       );
-      await fs.writeFile(path.join(dir, `screenshot.png`), data);
+      await fs.writeFile(filename, data);
       return {filename};
     } catch (err) {
       this.logger(err);
@@ -399,7 +400,7 @@ export class McpContext implements Context {
     return waitForHelper.waitForEventsAfterAction(action);
   }
 
-  getDebuggerSession() {
+  getDebuggerSession(): DebuggerSession {
     const page = this.getSelectedPage();
     return this.#debuggerManager.getSession(page);
   }

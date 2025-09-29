@@ -8,9 +8,9 @@
 
 ## Key Research Findings
 
-1. `Debugger.getScriptSource` returns the full source text for a given `scriptId`, which allows us to serve compiled bundle sources over MCP resources.【da38fc†L1-L22】
-2. `Debugger.setBreakpointByUrl` resolves breakpoints against all scripts whose URL (or regex) matches, so mapping original source coordinates to generated URLs lets CDP honor TypeScript/JSX breakpoints.【2c813c†L1-L36】
-3. `Debugger.scriptParsed` events surface `sourceMapURL`, providing the entrypoint for retrieving and parsing source maps when bundles map back to authored files.【bb5f66†L1-L72】
+1. [`Debugger.getScriptSource`](https://chromedevtools.github.io/devtools-protocol/tot/Debugger/#method-getScriptSource) returns the full source text for a given `scriptId`, which allows us to serve compiled bundle sources over MCP resources.
+2. [`Debugger.setBreakpointByUrl`](https://chromedevtools.github.io/devtools-protocol/tot/Debugger/#method-setBreakpointByUrl) resolves breakpoints against all scripts whose URL (or regex) matches, so mapping original source coordinates to generated URLs lets CDP honor TypeScript/JSX breakpoints.
+3. [`Debugger.scriptParsed`](https://chromedevtools.github.io/devtools-protocol/tot/Debugger/#event-scriptParsed) events surface `sourceMapURL`, providing the entrypoint for retrieving and parsing source maps when bundles map back to authored files.
 
 ## Success Rubric
 

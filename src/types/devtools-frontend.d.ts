@@ -9,8 +9,7 @@
  */
 
 declare module '../../../../testing/TraceLoader.js' {
-  const TraceLoader: unknown;
-  export = TraceLoader;
+  export const TraceLoader: unknown;
 }
 
 declare namespace Mocha {

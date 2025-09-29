@@ -272,8 +272,26 @@ export class DebuggerSession {
     this.#debuggerEnabled = false;
     this.#pausedDetails = undefined;
     this.#breakpoints.clear();
+    this.#scriptIdToUrl.clear();
+    this.#executionContextToFrameId.clear();
     this.#scriptSources.clear();
     this.#sourcesById.clear();
+    if (this.#runtimeEnabled) {
+      try {
+        await this.#session.send('Runtime.disable');
+      } catch (error) {
+        this.#logger(`Failed to disable Runtime domain: ${String(error)}`);
+      }
+      this.#runtimeEnabled = false;
+    }
+    if (this.#pageDomainEnabled) {
+      try {
+        await this.#session.send('Page.disable');
+      } catch (error) {
+        this.#logger(`Failed to disable Page domain: ${String(error)}`);
+      }
+      this.#pageDomainEnabled = false;
+    }
   }
 
   isEnabled(): boolean {
@@ -304,6 +322,8 @@ export class DebuggerSession {
     }
     await this.start();
     const session = await this.#ensureSession();
+    const requestedLineNumber = options.lineNumber;
+    const requestedColumnNumber = options.columnNumber;
     let targetUrl = options.url;
     let lineNumber = options.lineNumber;
     let columnNumber = options.columnNumber;
@@ -317,7 +337,7 @@ export class DebuggerSession {
       );
       targetUrl = mapped.url;
       lineNumber = mapped.lineNumber;
-      columnNumber = mapped.columnNumber;
+      columnNumber = mapped.columnNumber ?? undefined;
       originalUrl = mapped.originalUrl;
     }
 
@@ -329,9 +349,7 @@ export class DebuggerSession {
       url: targetUrl,
       lineNumber: Math.max(0, lineNumber - 1),
     };
-    if (options.columnNumber !== undefined) {
-      params.columnNumber = Math.max(0, columnNumber! - 1);
-    } else if (columnNumber !== undefined) {
+    if (columnNumber !== undefined) {
       params.columnNumber = Math.max(0, columnNumber - 1);
     }
     if (options.condition) {
@@ -343,8 +361,8 @@ export class DebuggerSession {
       breakpointId: result.breakpointId,
       requested: {
         url: targetUrl,
-        lineNumber,
-        columnNumber,
+        lineNumber: requestedLineNumber,
+        columnNumber: requestedColumnNumber,
         condition: options.condition,
         sourceId: options.sourceId,
         originalUrl,
@@ -373,30 +391,55 @@ export class DebuggerSession {
     columnNumber?: number;
   }): Promise<string[]> {
     await this.start();
+    const session = await this.#ensureSession();
     const toRemove: string[] = [];
     for (const [breakpointId, info] of this.#breakpoints.entries()) {
-      if (options.sourceId && info.requested.sourceId !== options.sourceId) {
+      if (options.sourceId) {
+        if (info.requested.sourceId !== options.sourceId) {
+          continue;
+        }
+      } else if (options.url) {
+        if (info.requested.url !== options.url) {
+          continue;
+        }
+      } else {
         continue;
       }
+
+      const requestedLine = info.requested.lineNumber;
+      const resolvedLine = info.resolvedLocation
+        ? info.resolvedLocation.lineNumber + 1
+        : undefined;
       if (
-        !options.sourceId &&
-        options.url &&
-        info.requested.url !== options.url
+        requestedLine !== options.lineNumber &&
+        resolvedLine !== options.lineNumber
       ) {
         continue;
       }
-      if (info.requested.lineNumber !== options.lineNumber) {
-        continue;
+
+      if (options.columnNumber !== undefined) {
+        const requestedColumn = info.requested.columnNumber;
+        const resolvedColumn =
+          info.resolvedLocation?.columnNumber !== undefined
+            ? info.resolvedLocation.columnNumber + 1
+            : undefined;
+        if (
+          requestedColumn !== options.columnNumber &&
+          resolvedColumn !== options.columnNumber
+        ) {
+          continue;
+        }
       }
-      if (
-        options.columnNumber !== undefined &&
-        info.requested.columnNumber !== options.columnNumber
-      ) {
-        continue;
-      }
+
       toRemove.push(breakpointId);
     }
-    await Promise.all(toRemove.map(id => this.removeBreakpointById(id)));
+
+    await Promise.all(
+      toRemove.map(async breakpointId => {
+        await session.send('Debugger.removeBreakpoint', {breakpointId});
+        this.#breakpoints.delete(breakpointId);
+      }),
+    );
     return toRemove;
   }
 
@@ -493,10 +536,20 @@ export class DebuggerSession {
         if (!property.enumerable) {
           continue;
         }
+        const valueString = formatRemoteObject(property.value);
         variables.push({
           name: property.name,
-          value: formatRemoteObject(property.value),
+          value: valueString,
         });
+        if (property.value?.objectId) {
+          try {
+            await session.send('Runtime.releaseObject', {
+              objectId: property.value.objectId,
+            });
+          } catch (error) {
+            this.#logger(`Failed to release property object: ${String(error)}`);
+          }
+        }
       }
       scopes.push({
         type: scope.type,
@@ -627,7 +680,7 @@ export class DebuggerSession {
     original: OriginalSourceRecord,
   ): Promise<string> {
     if (original.contentLoaded && original.content !== undefined) {
-      return original.content;
+      return original.content ?? '';
     }
     const sourceMap = await this.#ensureSourceMap(record);
     if (!sourceMap) {
@@ -636,7 +689,7 @@ export class DebuggerSession {
     if (sourceMap.sourcesContent?.[original.mapIndex]) {
       original.content = sourceMap.sourcesContent[original.mapIndex] ?? '';
       original.contentLoaded = true;
-      return original.content;
+      return original.content ?? '';
     }
     const content = await this.#fetchResourceContent(
       record,
@@ -675,17 +728,29 @@ export class DebuggerSession {
       throw new Error('Cannot resolve generated URL for anonymous script.');
     }
 
-    const consumer = new SourceMapConsumer(sourceMap);
+    const consumer = new SourceMapConsumer(sourceMap) as SourceMapConsumer & {
+      sources: ReadonlyArray<string>;
+      destroy?: () => void;
+    };
+    const sources = consumer.sources;
+    const sourceForIndex = sources[descriptor.mapIndex];
+    if (!sourceForIndex) {
+      consumer.destroy?.();
+      throw new Error('Could not resolve original source entry from map.');
+    }
     const generated = consumer.generatedPositionFor({
-      source: consumer.sources[descriptor.mapIndex]!,
+      source: sourceForIndex,
       line: lineNumber,
       column: columnNumber !== undefined ? Math.max(columnNumber - 1, 0) : 0,
       bias: SourceMapConsumer.GREATEST_LOWER_BOUND,
     });
 
     if (!generated || generated.line === null) {
+      consumer.destroy?.();
       throw new Error('Could not map requested location to generated code.');
     }
+
+    consumer.destroy?.();
 
     return {
       url: scriptUrl,
@@ -779,7 +844,7 @@ export class DebuggerSession {
       record.sourceMap = parsed;
       record.sourceMapLoaded = true;
       record.originalSources = new Map(
-        parsed.sources.map((sourceUrl, index) => {
+        parsed.sources.map((sourceUrl: string, index: number) => {
           const resolvedUrl = this.#resolveSourceUrl(
             parsed,
             record.url,
