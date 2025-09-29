@@ -19,6 +19,7 @@ import type {
   PredefinedNetworkConditions,
 } from 'puppeteer-core';
 
+import {DebuggerManager} from './debugger/DebuggerManager.js';
 import {NetworkCollector, PageCollector} from './PageCollector.js';
 import {listPages} from './tools/pages.js';
 import {CLOSE_PAGE_ERROR} from './tools/ToolDefinition.js';
@@ -68,6 +69,7 @@ export class McpContext implements Context {
   #textSnapshot: TextSnapshot | null = null;
   #networkCollector: NetworkCollector;
   #consoleCollector: PageCollector<ConsoleMessage | Error>;
+  #debuggerManager: DebuggerManager;
 
   #isRunningTrace = false;
   #networkConditionsMap = new WeakMap<Page, string>();
@@ -80,6 +82,8 @@ export class McpContext implements Context {
   private constructor(browser: Browser, logger: Debugger) {
     this.browser = browser;
     this.logger = logger;
+
+    this.#debuggerManager = new DebuggerManager(logger);
 
     this.#networkCollector = new NetworkCollector(
       this.browser,
@@ -381,5 +385,10 @@ export class McpContext implements Context {
       networkMultiplier,
     );
     return waitForHelper.waitForEventsAfterAction(action);
+  }
+
+  getDebuggerSession() {
+    const page = this.getSelectedPage();
+    return this.#debuggerManager.getSession(page);
   }
 }
