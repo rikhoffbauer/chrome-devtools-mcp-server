@@ -268,7 +268,11 @@ export class DebuggerSession {
     if (!this.#session || !this.#debuggerEnabled) {
       return;
     }
-    await this.#session.send('Debugger.disable');
+    try {
+      await this.#session.send('Debugger.disable');
+    } catch (error) {
+      this.#logger(`Failed to disable Debugger domain: ${String(error)}`);
+    }
     this.#debuggerEnabled = false;
     this.#pausedDetails = undefined;
     this.#breakpoints.clear();
@@ -391,7 +395,6 @@ export class DebuggerSession {
     columnNumber?: number;
   }): Promise<string[]> {
     await this.start();
-    const session = await this.#ensureSession();
     const toRemove: string[] = [];
     for (const [breakpointId, info] of this.#breakpoints.entries()) {
       if (options.sourceId) {
@@ -434,6 +437,11 @@ export class DebuggerSession {
       toRemove.push(breakpointId);
     }
 
+    if (toRemove.length === 0) {
+      return toRemove;
+    }
+
+    const session = await this.#ensureSession();
     await Promise.all(
       toRemove.map(async breakpointId => {
         await session.send('Debugger.removeBreakpoint', {breakpointId});
