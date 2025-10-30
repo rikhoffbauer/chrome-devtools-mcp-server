@@ -272,10 +272,130 @@
 
 ## Debugging
 
+### `debugger_start_session`
+
+**Description:** Enable the Chrome DevTools debugger on the selected page so you can manage breakpoints, expose page sources, and inspect execution state. Start every debugging workflow here before listing `page-sources` resources or installing breakpoints.
+
+**Parameters:** None
+
+---
+
+### `debugger_stop_session`
+
+**Description:** Disable the debugger on the selected page and clear every breakpoint. Use this after you finish investigating an issue so future actions do not pause unexpectedly.
+
+**Parameters:** None
+
+---
+
+### `debugger_set_breakpoint`
+
+**Description:** Install a breakpoint on the selected page using either a compiled script URL or a `sourceUri` from the `page-sources` resource. Typical flow: `debugger_start_session` -> inspect the source list -> call `debugger_set_breakpoint` -> trigger an action such as `click` -> read pause state with `debugger_get_status`.
+
+**Parameters:**
+
+- **url** (string) _(optional)_: Absolute or relative compiled script URL where the breakpoint should be applied.
+- **sourceUri** (string) _(optional)_: A resource URI returned by `page-sources` that points at an original (source-mapped) file.
+- **lineNumber** (integer) **(required)**: 1-based line number where execution should pause.
+- **columnNumber** (integer) _(optional)_: 1-based column number to narrow the breakpoint.
+- **condition** (string) _(optional)_: JavaScript expression evaluated when the breakpoint is hit; execution pauses only when it evaluates to true.
+
+---
+
+### `debugger_remove_breakpoint`
+
+**Description:** Remove a breakpoint by its identifier, by compiled URL, or by original `sourceUri`. Combine this with `debugger_list_breakpoints` when refining your pause plan after an investigation.
+
+**Parameters:**
+
+- **breakpointId** (string) _(optional)_: Identifier returned by `debugger_set_breakpoint`.
+- **url** (string) _(optional)_: Compiled script URL used when the breakpoint was created. Requires `lineNumber`.
+- **sourceUri** (string) _(optional)_: Source resource URI returned by `page-sources`. Requires `lineNumber`.
+- **lineNumber** (integer) _(optional)_: 1-based line number associated with the breakpoint. Required when using `url` or `sourceUri`.
+- **columnNumber** (integer) _(optional)_: 1-based column number, if the breakpoint was narrowed to a column.
+
+---
+
+### `debugger_list_breakpoints`
+
+**Description:** List every breakpoint on the selected page, highlighting whether each targets a compiled URL or an original `sourceUri`. Run this after adding or removing breakpoints to confirm the current debug plan.
+
+**Parameters:** None
+
+---
+
+### `debugger_pause`
+
+**Description:** Pause JavaScript execution on the selected page immediately. Helpful after setting breakpoints when you want to inspect state without waiting for user interaction or before calling `debugger_get_status`.
+
+**Parameters:** None
+
+---
+
+### `debugger_resume`
+
+**Description:** Resume JavaScript execution after a pause. Combine with `debugger_step_over`, `debugger_step_into`, and `debugger_step_out` to control execution flow once a breakpoint hits.
+
+**Parameters:** None
+
+---
+
+### `debugger_step_over`
+
+**Description:** When paused, run the current statement and pause on the next line in the same frame. Use this after reviewing locals with `debugger_get_scopes` when you want to stay in the current function.
+
+**Parameters:** None
+
+---
+
+### `debugger_step_into`
+
+**Description:** When paused, enter the next function call and pause at its first line. Ideal when the current stack shows a call you need to inspect more deeply.
+
+**Parameters:** None
+
+---
+
+### `debugger_step_out`
+
+**Description:** Run execution until the current function returns and pause at the caller. Use this to exit a callee after finishing your inspection.
+
+**Parameters:** None
+
+---
+
+### `debugger_get_status`
+
+**Description:** Summarize whether the debugger is running or paused, why execution stopped, and the current call stack. Run this immediately after triggering a breakpoint (for example: `debugger_set_breakpoint` -> `click` -> `debugger_get_status`) to choose which frame to inspect next.
+
+**Parameters:** None
+
+---
+
+### `debugger_get_scopes`
+
+**Description:** List scope variables for a call frame reported by `debugger_get_status`. Use this before stepping with `debugger_step_over` or evaluating expressions to understand available bindings.
+
+**Parameters:**
+
+- **callFrameIndex** (integer) **(required)**: Index of the call frame to inspect, as shown in `debugger_get_status`.
+
+---
+
+### `debugger_evaluate_expression`
+
+**Description:** Evaluate a JavaScript expression inside a paused call frame. Combine with `debugger_get_status` (to choose a frame) and `debugger_get_scopes` (to discover variable names) for targeted diagnostics.
+
+**Parameters:**
+
+- **callFrameIndex** (integer) **(required)**: Index of the call frame to evaluate against.
+- **expression** (string) **(required)**: JavaScript expression to evaluate in the selected call frame.
+
+---
+
 ### `evaluate_script`
 
-**Description:** Evaluate a JavaScript function inside the currently selected page. Returns the response as JSON
-so returned values have to JSON-serializable.
+**Description:** Evaluate a JavaScript function inside the currently selected page. Returns the response as JSON so returned values have to be JSON-serializable.
 
 **Parameters:**
 
