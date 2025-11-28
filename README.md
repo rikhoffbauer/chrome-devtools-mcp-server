@@ -66,22 +66,26 @@ amp mcp add chrome-devtools -- npx chrome-devtools-mcp@latest
 <details>
   <summary>Antigravity</summary>
 
-To use the Chrome DevTools MCP server, disable the built-in browser in the settings and add the following config to ` ~/.gemini/antigravity/mcp_config.json`:
+To use the Chrome DevTools MCP server follow the instructions from <a href="https://antigravity.google/docs/mcp">Antigravity's docs<a/> to install a custom MCP server. Add the following config to the MCP servers config:
 
 ```bash
 {
   "mcpServers": {
     "chrome-devtools": {
-      "type": "stdio",
       "command": "npx",
       "args": [
         "chrome-devtools-mcp@latest",
+        "--browser-url=http://127.0.0.1:9222",
         "-y"
       ]
     }
   }
 }
 ```
+
+This will make the Chrome DevTools MCP server automatically connect to the browser that Antigravity is using. If you are not using port 9222, make sure to adjust accordingly.
+
+Chrome DevTools MCP will not start the browser instance automatically using this approach as as the Chrome DevTools MCP server runs in Antigravity's built-in browser. If the browser is not already running, you have to start it first by clicking the Chrome icon at the top right corner.
 
 </details>
 
@@ -339,9 +343,12 @@ The Chrome DevTools MCP server supports the following configuration option:
   - **Type:** string
 
 - **`--isolated`**
-  If specified, creates a temporary user-data-dir that is automatically cleaned up after the browser is closed.
+  If specified, creates a temporary user-data-dir that is automatically cleaned up after the browser is closed. Defaults to false.
   - **Type:** boolean
-  - **Default:** `false`
+
+- **`--userDataDir`**
+  Path to the user data directory for Chrome. Default is $HOME/.cache/chrome-devtools-mcp/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE
+  - **Type:** string
 
 - **`--channel`**
   Specify a different Chrome channel that should be used. The default is the stable channel version.

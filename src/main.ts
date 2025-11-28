@@ -74,7 +74,8 @@ async function getContext(): Promise<McpContext> {
           headless: args.headless,
           executablePath: args.executablePath,
           channel: args.channel as Channel,
-          isolated: args.isolated,
+          isolated: args.isolated ?? false,
+          userDataDir: args.userDataDir,
           logFile,
           viewport: args.viewport,
           args: extraArgs,
@@ -142,28 +143,22 @@ function registerTool(tool: ToolDefinition): void {
           response,
           context,
         );
-        try {
-          const content = await response.handle(tool.name, context);
-          return {
-            content,
-          };
-        } catch (error) {
-          const errorText =
-            error instanceof Error ? error.message : String(error);
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: errorText,
-              },
-            ],
-            isError: true,
-          };
-        }
+        const content = await response.handle(tool.name, context);
+        return {
+          content,
+        };
       } catch (err) {
-        logger(`${tool.name} error: ${err.message}`);
-        throw err;
+        logger(`${tool.name} error:`, err, err?.stack);
+        const errorText = err && 'message' in err ? err.message : String(err);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: errorText,
+            },
+          ],
+          isError: true,
+        };
       } finally {
         guard.dispose();
       }
