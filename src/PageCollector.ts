@@ -16,7 +16,6 @@ import {
 } from '../node_modules/chrome-devtools-frontend/mcp/mcp.js';
 
 import {FakeIssuesManager} from './DevtoolsUtils.js';
-import {features} from './features.js';
 import {logger} from './logger.js';
 import type {
   CDPSession,
@@ -63,7 +62,6 @@ export class PageCollector<T> {
   ) => ListenerMap<PageEvents>;
   #listeners = new WeakMap<Page, ListenerMap>();
   #maxNavigationSaved = 3;
-  #includeAllPages?: boolean;
 
   /**
    * This maps a Page to a list of navigations with a sub-list
@@ -75,15 +73,12 @@ export class PageCollector<T> {
   constructor(
     browser: Browser,
     listeners: (collector: (item: T) => void) => ListenerMap<PageEvents>,
-    includeAllPages?: boolean,
   ) {
     this.#browser = browser;
     this.#listenersInitializer = listeners;
-    this.#includeAllPages = includeAllPages;
   }
 
-  async init() {
-    const pages = await this.#browser.pages(this.#includeAllPages);
+  async init(pages: Page[]) {
     for (const page of pages) {
       this.addPage(page);
     }
@@ -232,9 +227,6 @@ export class ConsoleCollector extends PageCollector<
 
   override addPage(page: Page): void {
     super.addPage(page);
-    if (!features.issues) {
-      return;
-    }
     if (!this.#subscribedPages.has(page)) {
       const subscriber = new PageIssueSubscriber(page);
       this.#subscribedPages.set(page, subscriber);
@@ -369,9 +361,8 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
         },
       } as ListenerMap;
     },
-    includeAllPages?: boolean,
   ) {
-    super(browser, listeners, includeAllPages);
+    super(browser, listeners);
   }
   override splitAfterNavigation(page: Page) {
     const navigations = this.storage.get(page) ?? [];

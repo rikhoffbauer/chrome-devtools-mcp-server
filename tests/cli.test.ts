@@ -3,6 +3,7 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
+
 import assert from 'node:assert';
 import {describe, it} from 'node:test';
 
@@ -24,7 +25,6 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      isolated: false,
       $0: 'npx chrome-devtools-mcp@latest',
       channel: 'stable',
     });
@@ -41,11 +41,28 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      isolated: false,
       $0: 'npx chrome-devtools-mcp@latest',
       'browser-url': 'http://localhost:3000',
       browserUrl: 'http://localhost:3000',
       u: 'http://localhost:3000',
+    });
+  });
+
+  it('parses with user data dir', async () => {
+    const args = parseArguments('1.0.0', [
+      'node',
+      'main.js',
+      '--user-data-dir',
+      '/tmp/chrome-profile',
+    ]);
+    assert.deepStrictEqual(args, {
+      ...defaultArgs,
+      _: [],
+      headless: false,
+      $0: 'npx chrome-devtools-mcp@latest',
+      channel: 'stable',
+      'user-data-dir': '/tmp/chrome-profile',
+      userDataDir: '/tmp/chrome-profile',
     });
   });
 
@@ -60,7 +77,6 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      isolated: false,
       $0: 'npx chrome-devtools-mcp@latest',
       'browser-url': undefined,
       browserUrl: undefined,
@@ -80,7 +96,6 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      isolated: false,
       $0: 'npx chrome-devtools-mcp@latest',
       'executable-path': '/tmp/test 123/chrome',
       e: '/tmp/test 123/chrome',
@@ -99,7 +114,6 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      isolated: false,
       $0: 'npx chrome-devtools-mcp@latest',
       channel: 'stable',
       viewport: {
@@ -120,7 +134,6 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      isolated: false,
       $0: 'npx chrome-devtools-mcp@latest',
       channel: 'stable',
       'chrome-arg': ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -139,7 +152,6 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      isolated: false,
       $0: 'npx chrome-devtools-mcp@latest',
       'ws-endpoint': 'ws://127.0.0.1:9222/devtools/browser/abc123',
       wsEndpoint: 'ws://127.0.0.1:9222/devtools/browser/abc123',
@@ -158,7 +170,6 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      isolated: false,
       $0: 'npx chrome-devtools-mcp@latest',
       'ws-endpoint': 'wss://example.com:9222/devtools/browser/abc123',
       wsEndpoint: 'wss://example.com:9222/devtools/browser/abc123',
@@ -191,7 +202,6 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      isolated: false,
       $0: 'npx chrome-devtools-mcp@latest',
       channel: 'stable',
       'category-emulation': false,

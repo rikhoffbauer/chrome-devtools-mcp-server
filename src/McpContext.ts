@@ -3,6 +3,7 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
+
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,6 +36,11 @@ export interface TextSnapshotNode extends SerializedAXNode {
   id: string;
   backendNodeId?: number;
   children: TextSnapshotNode[];
+}
+
+export interface GeolocationOptions {
+  latitude: number;
+  longitude: number;
 }
 
 export interface TextSnapshot {
@@ -103,6 +109,7 @@ export class McpContext implements Context {
   #isRunningTrace = false;
   #networkConditionsMap = new WeakMap<Page, string>();
   #cpuThrottlingRateMap = new WeakMap<Page, number>();
+  #geolocationMap = new WeakMap<Page, GeolocationOptions>();
   #dialog?: Dialog;
 
   #nextSnapshotId = 1;
@@ -122,41 +129,33 @@ export class McpContext implements Context {
     this.#locatorClass = locatorClass;
     this.#options = options;
 
-    this.#networkCollector = new NetworkCollector(
-      this.browser,
-      undefined,
-      this.#options.experimentalIncludeAllPages,
-    );
+    this.#networkCollector = new NetworkCollector(this.browser);
 
-    this.#consoleCollector = new ConsoleCollector(
-      this.browser,
-      collect => {
-        return {
-          console: event => {
+    this.#consoleCollector = new ConsoleCollector(this.browser, collect => {
+      return {
+        console: event => {
+          collect(event);
+        },
+        pageerror: event => {
+          if (event instanceof Error) {
             collect(event);
-          },
-          pageerror: event => {
-            if (event instanceof Error) {
-              collect(event);
-            } else {
-              const error = new Error(`${event}`);
-              error.stack = undefined;
-              collect(error);
-            }
-          },
-          issue: event => {
-            collect(event);
-          },
-        } as ListenerMap;
-      },
-      this.#options.experimentalIncludeAllPages,
-    );
+          } else {
+            const error = new Error(`${event}`);
+            error.stack = undefined;
+            collect(error);
+          }
+        },
+        issue: event => {
+          collect(event);
+        },
+      } as ListenerMap;
+    });
   }
 
   async #init() {
-    await this.createPagesSnapshot();
-    await this.#networkCollector.init();
-    await this.#consoleCollector.init();
+    const pages = await this.createPagesSnapshot();
+    await this.#networkCollector.init(pages);
+    await this.#consoleCollector.init(pages);
   }
 
   dispose() {
@@ -198,8 +197,12 @@ export class McpContext implements Context {
       this.logger('no cdpBackendNodeId');
       return;
     }
+    if (this.#textSnapshot === null) {
+      this.logger('no text snapshot');
+      return;
+    }
     // TODO: index by backendNodeId instead.
-    const queue = [this.#textSnapshot?.root];
+    const queue = [this.#textSnapshot.root];
     while (queue.length) {
       const current = queue.pop()!;
       if (current.backendNodeId === cdpBackendNodeId) {
@@ -278,6 +281,20 @@ export class McpContext implements Context {
   getCpuThrottlingRate(): number {
     const page = this.getSelectedPage();
     return this.#cpuThrottlingRateMap.get(page) ?? 1;
+  }
+
+  setGeolocation(geolocation: GeolocationOptions | null): void {
+    const page = this.getSelectedPage();
+    if (geolocation === null) {
+      this.#geolocationMap.delete(page);
+    } else {
+      this.#geolocationMap.set(page, geolocation);
+    }
+  }
+
+  getGeolocation(): GeolocationOptions | null {
+    const page = this.getSelectedPage();
+    return this.#geolocationMap.get(page) ?? null;
   }
 
   setIsRunningPerformanceTrace(x: boolean): void {
@@ -402,7 +419,10 @@ export class McpContext implements Context {
       );
     });
 
-    if (!this.#selectedPage || this.#pages.indexOf(this.#selectedPage) === -1) {
+    if (
+      (!this.#selectedPage || this.#pages.indexOf(this.#selectedPage) === -1) &&
+      this.#pages[0]
+    ) {
       this.selectPage(this.#pages[0]);
     }
 
@@ -617,17 +637,11 @@ export class McpContext implements Context {
     return this.#networkCollector.getIdForResource(request);
   }
 
-  waitForTextOnPage({
-    text,
-    timeout,
-  }: {
-    text: string;
-    timeout?: number | undefined;
-  }): Promise<Element> {
+  waitForTextOnPage(text: string, timeout?: number): Promise<Element> {
     const page = this.getSelectedPage();
     const frames = page.frames();
 
-    const locator = this.#locatorClass.race(
+    let locator = this.#locatorClass.race(
       frames.flatMap(frame => [
         frame.locator(`aria/${text}`),
         frame.locator(`text/${text}`),
@@ -635,7 +649,7 @@ export class McpContext implements Context {
     );
 
     if (timeout) {
-      locator.setTimeout(timeout);
+      locator = locator.setTimeout(timeout);
     }
 
     return locator.wait();
@@ -655,6 +669,6 @@ export class McpContext implements Context {
         },
       } as ListenerMap;
     });
-    await this.#networkCollector.init();
+    await this.#networkCollector.init(await this.browser.pages());
   }
 }

@@ -3,21 +3,14 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-import assert from 'node:assert';
-import {afterEach, beforeEach, describe, it} from 'node:test';
 
-import type {
-  Browser,
-  Frame,
-  HTTPRequest,
-  Page,
-  Target,
-  Protocol,
-} from 'puppeteer-core';
+import assert from 'node:assert';
+import {beforeEach, describe, it} from 'node:test';
+
+import type {Frame, HTTPRequest, Target, Protocol} from 'puppeteer-core';
 import sinon from 'sinon';
 
 import {AggregatedIssue} from '../node_modules/chrome-devtools-frontend/mcp/mcp.js';
-import {setIssuesEnabled} from '../src/features.js';
 import type {ListenerMap} from '../src/PageCollector.js';
 import {
   ConsoleCollector,
@@ -25,58 +18,7 @@ import {
   PageCollector,
 } from '../src/PageCollector.js';
 
-import {getMockRequest} from './utils.js';
-
-function mockListener() {
-  const listeners: Record<string, Array<(data: unknown) => void>> = {};
-  return {
-    on(eventName: string, listener: (data: unknown) => void) {
-      if (listeners[eventName]) {
-        listeners[eventName].push(listener);
-      } else {
-        listeners[eventName] = [listener];
-      }
-    },
-    off(_eventName: string, _listener: (data: unknown) => void) {
-      // no-op
-    },
-    emit(eventName: string, data: unknown) {
-      for (const listener of listeners[eventName] ?? []) {
-        listener(data);
-      }
-    },
-  };
-}
-
-function getMockPage(): Page {
-  const mainFrame = {} as Frame;
-  const cdpSession = {
-    ...mockListener(),
-    send: () => {
-      // no-op
-    },
-  };
-  return {
-    mainFrame() {
-      return mainFrame;
-    },
-    ...mockListener(),
-    // @ts-expect-error internal API.
-    _client() {
-      return cdpSession;
-    },
-  } satisfies Page;
-}
-
-function getMockBrowser(): Browser {
-  const pages = [getMockPage()];
-  return {
-    pages() {
-      return Promise.resolve(pages);
-    },
-    ...mockListener(),
-  } as Browser;
-}
+import {getMockRequest, getMockBrowser} from './utils.js';
 
 describe('PageCollector', () => {
   it('works', async () => {
@@ -90,7 +32,7 @@ describe('PageCollector', () => {
         },
       } as ListenerMap;
     });
-    await collector.init();
+    await collector.init([page]);
     page.emit('request', request);
 
     assert.equal(collector.getData(page)[0], request);
@@ -108,7 +50,7 @@ describe('PageCollector', () => {
         },
       } as ListenerMap;
     });
-    await collector.init();
+    await collector.init([page]);
     page.emit('request', request);
 
     assert.equal(collector.getData(page)[0], request);
@@ -128,7 +70,7 @@ describe('PageCollector', () => {
         },
       } as ListenerMap;
     });
-    await collector.init();
+    await collector.init([page]);
     page.emit('request', request);
     page.emit('framenavigated', {} as Frame);
 
@@ -147,7 +89,7 @@ describe('PageCollector', () => {
         },
       } as ListenerMap;
     });
-    await collector.init();
+    await collector.init([page]);
     page.emit('request', request);
 
     assert.equal(collector.getData(page)[0], request);
@@ -171,7 +113,7 @@ describe('PageCollector', () => {
         },
       } as ListenerMap;
     });
-    await collector.init();
+    await collector.init([page]);
     browser.emit('targetcreated', {
       page() {
         return Promise.resolve(page);
@@ -203,7 +145,7 @@ describe('PageCollector', () => {
         },
       } as ListenerMap;
     });
-    await collector.init();
+    await collector.init([page]);
 
     page.emit('request', request);
 
@@ -233,7 +175,7 @@ describe('PageCollector', () => {
         },
       } as ListenerMap;
     });
-    await collector.init();
+    await collector.init([page]);
 
     page.emit('request', request1);
     page.emit('request', request2);
@@ -257,7 +199,7 @@ describe('NetworkCollector', () => {
     });
     const request2 = getMockRequest();
     const collector = new NetworkCollector(browser);
-    await collector.init();
+    await collector.init([page]);
     page.emit('request', request);
     page.emit('request', navRequest);
 
@@ -290,7 +232,7 @@ describe('NetworkCollector', () => {
     const request = getMockRequest();
 
     const collector = new NetworkCollector(browser);
-    await collector.init();
+    await collector.init([page]);
     page.emit('request', navRequest);
     assert.equal(collector.getData(page)[0], navRequest);
 
@@ -326,7 +268,7 @@ describe('NetworkCollector', () => {
     const request = getMockRequest();
 
     const collector = new NetworkCollector(browser);
-    await collector.init();
+    await collector.init([page]);
     page.emit('request', navRequest);
     assert.equal(collector.getData(page, true).length, 1);
 
@@ -358,11 +300,6 @@ describe('ConsoleCollector', () => {
         },
       },
     };
-    setIssuesEnabled(true);
-  });
-
-  afterEach(() => {
-    setIssuesEnabled(false);
   });
 
   it('emits issues on page', async () => {
@@ -381,7 +318,7 @@ describe('ConsoleCollector', () => {
         },
       } as ListenerMap;
     });
-    await collector.init();
+    await collector.init([page]);
     cdpSession.emit('Audits.issueAdded', {issue});
     sinon.assert.calledOnce(onIssuesListener);
 
@@ -402,7 +339,7 @@ describe('ConsoleCollector', () => {
         },
       } as ListenerMap;
     });
-    await collector.init();
+    await collector.init([page]);
 
     const issue2 = {
       code: 'ElementAccessibilityIssue' as const,
@@ -434,7 +371,7 @@ describe('ConsoleCollector', () => {
         },
       } as ListenerMap;
     });
-    await collector.init();
+    await collector.init([page]);
 
     cdpSession.emit('Audits.issueAdded', {issue});
     cdpSession.emit('Audits.issueAdded', {issue});
