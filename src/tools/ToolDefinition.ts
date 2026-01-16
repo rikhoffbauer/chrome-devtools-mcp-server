@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {TextSnapshotNode} from '../McpContext.js';
+import type {TextSnapshotNode, GeolocationOptions} from '../McpContext.js';
 import {zod} from '../third_party/index.js';
 import type {Dialog, ElementHandle, Page} from '../third_party/index.js';
 import type {TraceResult} from '../trace-processing/parse.js';
@@ -24,6 +24,7 @@ export interface ToolDefinition<
      * If true, the tool does not modify its environment.
      */
     readOnlyHint: boolean;
+    conditions?: string[];
   };
   schema: Schema;
   handler: (
@@ -76,6 +77,7 @@ export interface Response {
   attachConsoleMessage(msgid: number): void;
   // Allows re-using DevTools data queried by some tools.
   attachDevToolsData(data: DevToolsData): void;
+  setTabId(tabId: string): void;
 }
 
 /**
@@ -89,15 +91,17 @@ export type Context = Readonly<{
   getSelectedPage(): Page;
   getDialog(): Dialog | undefined;
   clearDialog(): void;
-  getPageByIdx(idx: number): Page;
+  getPageById(pageId: number): Page;
+  getPageId(page: Page): number | undefined;
   isPageSelected(page: Page): boolean;
   newPage(): Promise<Page>;
-  closePage(pageIdx: number): Promise<void>;
+  closePage(pageId: number): Promise<void>;
   selectPage(page: Page): void;
   getElementByUid(uid: string): Promise<ElementHandle<Element>>;
   getAXNodeByUid(uid: string): TextSnapshotNode | undefined;
   setNetworkConditions(conditions: string | null): void;
   setCpuThrottlingRate(rate: number): void;
+  setGeolocation(geolocation: GeolocationOptions | null): void;
   saveTemporaryFile(
     data: Uint8Array<ArrayBufferLike>,
     mimeType: 'image/png' | 'image/jpeg' | 'image/webp',
@@ -107,10 +111,7 @@ export type Context = Readonly<{
     filename: string,
   ): Promise<{filename: string}>;
   waitForEventsAfterAction(action: () => Promise<unknown>): Promise<void>;
-  waitForTextOnPage(params: {
-    text: string;
-    timeout?: number | undefined;
-  }): Promise<Element>;
+  waitForTextOnPage(text: string, timeout?: number): Promise<Element>;
   getDevToolsData(): Promise<DevToolsData>;
   /**
    * Returns a reqid for a cdpRequestId.

@@ -3,6 +3,7 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
+
 import assert from 'node:assert';
 import {describe, it} from 'node:test';
 
@@ -10,11 +11,11 @@ import sinon from 'sinon';
 
 import type {TraceResult} from '../src/trace-processing/parse.js';
 
-import {html, withBrowser} from './utils.js';
+import {getMockRequest, html, withMcpContext} from './utils.js';
 
 describe('McpContext', () => {
   it('list pages', async () => {
-    await withBrowser(async (_response, context) => {
+    await withMcpContext(async (_response, context) => {
       const page = context.getSelectedPage();
       await page.setContent(
         html`<button>Click me</button
@@ -39,7 +40,7 @@ describe('McpContext', () => {
   });
 
   it('can store and retrieve performance traces', async () => {
-    await withBrowser(async (_response, context) => {
+    await withMcpContext(async (_response, context) => {
       const fakeTrace1 = {} as unknown as TraceResult;
       const fakeTrace2 = {} as unknown as TraceResult;
       context.storeTraceRecording(fakeTrace1);
@@ -49,7 +50,7 @@ describe('McpContext', () => {
   });
 
   it('should update default timeout when cpu throttling changes', async () => {
-    await withBrowser(async (_response, context) => {
+    await withMcpContext(async (_response, context) => {
       const page = await context.newPage();
       const timeoutBefore = page.getDefaultTimeout();
       context.setCpuThrottlingRate(2);
@@ -59,7 +60,7 @@ describe('McpContext', () => {
   });
 
   it('should update default timeout when network conditions changes', async () => {
-    await withBrowser(async (_response, context) => {
+    await withMcpContext(async (_response, context) => {
       const page = await context.newPage();
       const timeoutBefore = page.getDefaultNavigationTimeout();
       context.setNetworkConditions('Slow 3G');
@@ -69,7 +70,7 @@ describe('McpContext', () => {
   });
 
   it('should call waitForEventsAfterAction with correct multipliers', async () => {
-    await withBrowser(async (_response, context) => {
+    await withMcpContext(async (_response, context) => {
       const page = await context.newPage();
 
       context.setCpuThrottlingRate(2);
@@ -85,7 +86,7 @@ describe('McpContext', () => {
   });
 
   it('should should detect open DevTools pages', async () => {
-    await withBrowser(
+    await withMcpContext(
       async (_response, context) => {
         const page = await context.newPage();
         // TODO: we do not know when the CLI flag to auto open DevTools will run
@@ -99,5 +100,38 @@ describe('McpContext', () => {
         autoOpenDevTools: true,
       },
     );
+  });
+  it('should include network requests in structured content', async t => {
+    await withMcpContext(async (response, context) => {
+      const mockRequest = getMockRequest({
+        url: 'http://example.com/api',
+        stableId: 123,
+      });
+
+      sinon.stub(context, 'getNetworkRequests').returns([mockRequest]);
+      sinon.stub(context, 'getNetworkRequestStableId').returns(123);
+
+      response.setIncludeNetworkRequests(true);
+      const result = await response.handle('test', context);
+
+      t.assert.snapshot?.(JSON.stringify(result.structuredContent, null, 2));
+    });
+  });
+
+  it('should include detailed network request in structured content', async t => {
+    await withMcpContext(async (response, context) => {
+      const mockRequest = getMockRequest({
+        url: 'http://example.com/detail',
+        stableId: 456,
+      });
+
+      sinon.stub(context, 'getNetworkRequestById').returns(mockRequest);
+      sinon.stub(context, 'getNetworkRequestStableId').returns(456);
+
+      response.attachNetworkRequest(456);
+      const result = await response.handle('test', context);
+
+      t.assert.snapshot?.(JSON.stringify(result.structuredContent, null, 2));
+    });
   });
 });

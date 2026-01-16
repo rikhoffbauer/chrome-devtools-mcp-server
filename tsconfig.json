@@ -37,11 +37,13 @@
     "node_modules/chrome-devtools-frontend/front_end/foundation/Universe.ts",
     "node_modules/chrome-devtools-frontend/front_end/generated",
     "node_modules/chrome-devtools-frontend/front_end/legacy/legacy-defs.d.ts",
+    "node_modules/chrome-devtools-frontend/front_end/models/annotations",
     "node_modules/chrome-devtools-frontend/front_end/models/ai_assistance/data_formatters/NetworkRequestFormatter.ts",
     "node_modules/chrome-devtools-frontend/front_end/models/ai_assistance/data_formatters/PerformanceInsightFormatter.ts",
     "node_modules/chrome-devtools-frontend/front_end/models/ai_assistance/data_formatters/PerformanceTraceFormatter.ts",
     "node_modules/chrome-devtools-frontend/front_end/models/ai_assistance/data_formatters/UnitFormatters.ts",
     "node_modules/chrome-devtools-frontend/front_end/models/ai_assistance/performance",
+    "node_modules/chrome-devtools-frontend/front_end/models/greendev",
     "node_modules/chrome-devtools-frontend/front_end/models/bindings",
     "node_modules/chrome-devtools-frontend/front_end/models/cpu_profile",
     "node_modules/chrome-devtools-frontend/front_end/models/crux-manager",
@@ -64,7 +66,7 @@
     "node_modules/chrome-devtools-frontend/front_end/third_party/marked",
     "node_modules/chrome-devtools-frontend/front_end/third_party/source-map-scopes-codec",
     "node_modules/chrome-devtools-frontend/front_end/third_party/third-party-web",
-    "node_modules/chrome-devtools-frontend/mcp/mcp.ts"
+    "node_modules/chrome-devtools-frontend/mcp"
   ],
   "exclude": ["node_modules/chrome-devtools-frontend/**/*.test.ts"]
 }

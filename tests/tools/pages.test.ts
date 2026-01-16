@@ -3,6 +3,7 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
+
 import assert from 'node:assert';
 import {describe, it} from 'node:test';
 
@@ -16,13 +17,14 @@ import {
   navigatePage,
   resizePage,
   handleDialog,
+  getTabId,
 } from '../../src/tools/pages.js';
-import {withBrowser} from '../utils.js';
+import {withMcpContext} from '../utils.js';
 
 describe('pages', () => {
   describe('list_pages', () => {
     it('list pages', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         await listPages.handler({params: {}}, response, context);
         assert.ok(response.includePages);
       });
@@ -30,33 +32,33 @@ describe('pages', () => {
   });
   describe('new_page', () => {
     it('create a page', async () => {
-      await withBrowser(async (response, context) => {
-        assert.strictEqual(context.getPageByIdx(0), context.getSelectedPage());
+      await withMcpContext(async (response, context) => {
+        assert.strictEqual(context.getPageById(1), context.getSelectedPage());
         await newPage.handler(
           {params: {url: 'about:blank'}},
           response,
           context,
         );
-        assert.strictEqual(context.getPageByIdx(1), context.getSelectedPage());
+        assert.strictEqual(context.getPageById(2), context.getSelectedPage());
         assert.ok(response.includePages);
       });
     });
   });
   describe('close_page', () => {
     it('closes a page', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = await context.newPage();
-        assert.strictEqual(context.getPageByIdx(1), context.getSelectedPage());
-        assert.strictEqual(context.getPageByIdx(1), page);
-        await closePage.handler({params: {pageIdx: 1}}, response, context);
+        assert.strictEqual(context.getPageById(2), context.getSelectedPage());
+        assert.strictEqual(context.getPageById(2), page);
+        await closePage.handler({params: {pageId: 2}}, response, context);
         assert.ok(page.isClosed());
         assert.ok(response.includePages);
       });
     });
     it('cannot close the last page', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
-        await closePage.handler({params: {pageIdx: 0}}, response, context);
+        await closePage.handler({params: {pageId: 1}}, response, context);
         assert.deepStrictEqual(
           response.responseLines[0],
           `The last open page cannot be closed. It is fine to keep it open.`,
@@ -68,18 +70,35 @@ describe('pages', () => {
   });
   describe('select_page', () => {
     it('selects a page', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         await context.newPage();
-        assert.strictEqual(context.getPageByIdx(1), context.getSelectedPage());
-        await selectPage.handler({params: {pageIdx: 0}}, response, context);
-        assert.strictEqual(context.getPageByIdx(0), context.getSelectedPage());
+        assert.strictEqual(context.getPageById(2), context.getSelectedPage());
+        await selectPage.handler({params: {pageId: 1}}, response, context);
+        assert.strictEqual(context.getPageById(1), context.getSelectedPage());
+        assert.ok(response.includePages);
+      });
+    });
+    it('selects a page and keeps it focused in the background', async () => {
+      await withMcpContext(async (response, context) => {
+        await context.newPage();
+        assert.strictEqual(context.getPageById(2), context.getSelectedPage());
+        assert.strictEqual(
+          await context.getPageById(1).evaluate(() => document.hasFocus()),
+          false,
+        );
+        await selectPage.handler({params: {pageId: 1}}, response, context);
+        assert.strictEqual(context.getPageById(1), context.getSelectedPage());
+        assert.strictEqual(
+          await context.getPageById(1).evaluate(() => document.hasFocus()),
+          true,
+        );
         assert.ok(response.includePages);
       });
     });
   });
   describe('navigate_page', () => {
     it('navigates to correct page', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         await navigatePage.handler(
           {params: {url: 'data:text/html,<div>Hello MCP</div>'}},
           response,
@@ -95,10 +114,10 @@ describe('pages', () => {
     });
 
     it('throws an error if the page was closed not by the MCP server', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = await context.newPage();
-        assert.strictEqual(context.getPageByIdx(1), context.getSelectedPage());
-        assert.strictEqual(context.getPageByIdx(1), page);
+        assert.strictEqual(context.getPageById(2), context.getSelectedPage());
+        assert.strictEqual(context.getPageById(2), page);
 
         await page.close();
 
@@ -118,7 +137,7 @@ describe('pages', () => {
       });
     });
     it('go back', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.goto('data:text/html,<div>Hello MCP</div>');
         await navigatePage.handler({params: {type: 'back'}}, response, context);
@@ -131,7 +150,7 @@ describe('pages', () => {
       });
     });
     it('go forward', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.goto('data:text/html,<div>Hello MCP</div>');
         await page.goBack();
@@ -149,7 +168,7 @@ describe('pages', () => {
       });
     });
     it('reload', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.goto('data:text/html,<div>Hello MCP</div>');
         await navigatePage.handler(
@@ -166,7 +185,7 @@ describe('pages', () => {
       });
     });
     it('go forward with error', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         await navigatePage.handler(
           {params: {type: 'forward'}},
           response,
@@ -182,7 +201,7 @@ describe('pages', () => {
       });
     });
     it('go back with error', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         await navigatePage.handler({params: {type: 'back'}}, response, context);
 
         assert.ok(
@@ -195,8 +214,8 @@ describe('pages', () => {
     });
   });
   describe('resize', () => {
-    it('create a page', async () => {
-      await withBrowser(async (response, context) => {
+    it('resize the page', async () => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         const resizePromise = page.evaluate(() => {
           return new Promise(resolve => {
@@ -209,17 +228,144 @@ describe('pages', () => {
           context,
         );
         await resizePromise;
+        await page.waitForFunction(
+          () => window.innerWidth === 700 && window.innerHeight === 500,
+        );
         const dimensions = await page.evaluate(() => {
           return [window.innerWidth, window.innerHeight];
         });
         assert.deepStrictEqual(dimensions, [700, 500]);
       });
     });
+
+    it('resize when window state is normal', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPage();
+        const browser = page.browser();
+        const windowId = await page.windowId();
+        await browser.setWindowBounds(windowId, {windowState: 'normal'});
+
+        const {windowState} = await browser.getWindowBounds(windowId);
+        assert.strictEqual(windowState, 'normal');
+
+        const resizePromise = page.evaluate(() => {
+          return new Promise(resolve => {
+            window.addEventListener('resize', resolve, {once: true});
+          });
+        });
+        await resizePage.handler(
+          {params: {width: 650, height: 450}},
+          response,
+          context,
+        );
+        await resizePromise;
+        await page.waitForFunction(
+          () => window.innerWidth === 650 && window.innerHeight === 450,
+        );
+        const dimensions = await page.evaluate(() => {
+          return [window.innerWidth, window.innerHeight];
+        });
+        assert.deepStrictEqual(dimensions, [650, 450]);
+      });
+    });
+
+    it('resize when window state is minimized', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPage();
+        const browser = page.browser();
+        const windowId = await page.windowId();
+        await browser.setWindowBounds(windowId, {windowState: 'minimized'});
+
+        const {windowState} = await browser.getWindowBounds(windowId);
+        assert.strictEqual(windowState, 'minimized');
+
+        const resizePromise = page.evaluate(() => {
+          return new Promise(resolve => {
+            window.addEventListener('resize', resolve, {once: true});
+          });
+        });
+        await resizePage.handler(
+          {params: {width: 750, height: 550}},
+          response,
+          context,
+        );
+        await resizePromise;
+        await page.waitForFunction(
+          () => window.innerWidth === 750 && window.innerHeight === 550,
+        );
+        const dimensions = await page.evaluate(() => {
+          return [window.innerWidth, window.innerHeight];
+        });
+        assert.deepStrictEqual(dimensions, [750, 550]);
+      });
+    });
+
+    it('resize when window state is maximized', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPage();
+        const browser = page.browser();
+        const windowId = await page.windowId();
+        await browser.setWindowBounds(windowId, {windowState: 'maximized'});
+
+        const {windowState} = await browser.getWindowBounds(windowId);
+        assert.strictEqual(windowState, 'maximized');
+
+        const resizePromise = page.evaluate(() => {
+          return new Promise(resolve => {
+            window.addEventListener('resize', resolve, {once: true});
+          });
+        });
+        await resizePage.handler(
+          {params: {width: 725, height: 525}},
+          response,
+          context,
+        );
+        await resizePromise;
+        await page.waitForFunction(
+          () => window.innerWidth === 725 && window.innerHeight === 525,
+        );
+        const dimensions = await page.evaluate(() => {
+          return [window.innerWidth, window.innerHeight];
+        });
+        assert.deepStrictEqual(dimensions, [725, 525]);
+      });
+    });
+
+    it('resize when window state is fullscreen', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPage();
+        const browser = page.browser();
+        const windowId = await page.windowId();
+        await browser.setWindowBounds(windowId, {windowState: 'fullscreen'});
+
+        const {windowState} = await browser.getWindowBounds(windowId);
+        assert.strictEqual(windowState, 'fullscreen');
+
+        const resizePromise = page.evaluate(() => {
+          return new Promise(resolve => {
+            window.addEventListener('resize', resolve, {once: true});
+          });
+        });
+        await resizePage.handler(
+          {params: {width: 850, height: 650}},
+          response,
+          context,
+        );
+        await resizePromise;
+        await page.waitForFunction(
+          () => window.innerWidth === 850 && window.innerHeight === 650,
+        );
+        const dimensions = await page.evaluate(() => {
+          return [window.innerWidth, window.innerHeight];
+        });
+        assert.deepStrictEqual(dimensions, [850, 650]);
+      });
+    });
   });
 
   describe('dialogs', () => {
     it('can accept dialogs', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         const dialogPromise = new Promise<void>(resolve => {
           page.on('dialog', () => {
@@ -247,7 +393,7 @@ describe('pages', () => {
       });
     });
     it('can dismiss dialogs', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         const dialogPromise = new Promise<void>(resolve => {
           page.on('dialog', () => {
@@ -275,7 +421,7 @@ describe('pages', () => {
       });
     });
     it('can dismiss already dismissed dialog dialogs', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         const dialogPromise = new Promise<Dialog>(resolve => {
           page.on('dialog', dialog => {
@@ -301,6 +447,23 @@ describe('pages', () => {
           response.responseLines[0],
           'Successfully dismissed the dialog',
         );
+      });
+    });
+  });
+
+  describe('get_tab_id', () => {
+    it('returns the tab id', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPage();
+        // @ts-expect-error _tabId is internal.
+        assert.ok(typeof page._tabId === 'string');
+        // @ts-expect-error _tabId is internal.
+        page._tabId = 'test-tab-id';
+        await getTabId.handler({params: {pageId: 1}}, response, context);
+        const result = await response.handle('get_tab_id', context);
+        // @ts-expect-error _tabId is internal.
+        assert.strictEqual(result.structuredContent.tabId, 'test-tab-id');
+        assert.deepStrictEqual(response.responseLines, []);
       });
     });
   });

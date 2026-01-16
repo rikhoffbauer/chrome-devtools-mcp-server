@@ -31,17 +31,23 @@ export const selectPage = defineTool({
     readOnlyHint: true,
   },
   schema: {
-    pageIdx: zod
+    pageId: zod
       .number()
       .describe(
-        'The index of the page to select. Call list_pages to list pages.',
+        `The ID of the page to select. Call ${listPages.name} to get available pages.`,
       ),
+    bringToFront: zod
+      .boolean()
+      .optional()
+      .describe('Whether to focus the page and bring it to the top.'),
   },
   handler: async (request, response, context) => {
-    const page = context.getPageByIdx(request.params.pageIdx);
-    await page.bringToFront();
+    const page = context.getPageById(request.params.pageId);
     context.selectPage(page);
     response.setIncludePages(true);
+    if (request.params.bringToFront) {
+      await page.bringToFront();
+    }
   },
 });
 
@@ -53,15 +59,13 @@ export const closePage = defineTool({
     readOnlyHint: false,
   },
   schema: {
-    pageIdx: zod
+    pageId: zod
       .number()
-      .describe(
-        'The index of the page to close. Call list_pages to list pages.',
-      ),
+      .describe('The ID of the page to close. Call list_pages to list pages.'),
   },
   handler: async (request, response, context) => {
     try {
-      await context.closePage(request.params.pageIdx);
+      await context.closePage(request.params.pageId);
     } catch (err) {
       if (err.message === CLOSE_PAGE_ERROR) {
         response.appendResponseLine(err.message);
@@ -207,7 +211,22 @@ export const resizePage = defineTool({
   handler: async (request, response, context) => {
     const page = context.getSelectedPage();
 
-    // @ts-expect-error internal API for now.
+    try {
+      const browser = page.browser();
+      const windowId = await page.windowId();
+
+      const bounds = await browser.getWindowBounds(windowId);
+
+      if (bounds.windowState === 'fullscreen') {
+        // Have to call this twice on Ubuntu when the window is in fullscreen mode.
+        await browser.setWindowBounds(windowId, {windowState: 'normal'});
+        await browser.setWindowBounds(windowId, {windowState: 'normal'});
+      } else if (bounds.windowState !== 'normal') {
+        await browser.setWindowBounds(windowId, {windowState: 'normal'});
+      }
+    } catch {
+      // Window APIs are not supported on all platforms
+    }
     await page.resize({
       contentWidth: request.params.width,
       contentHeight: request.params.height,
@@ -264,5 +283,28 @@ export const handleDialog = defineTool({
 
     context.clearDialog();
     response.setIncludePages(true);
+  },
+});
+
+export const getTabId = defineTool({
+  name: 'get_tab_id',
+  description: `Get the tab ID of the page`,
+  annotations: {
+    category: ToolCategory.NAVIGATION,
+    readOnlyHint: true,
+    conditions: ['experimentalInteropTools'],
+  },
+  schema: {
+    pageId: zod
+      .number()
+      .describe(
+        `The ID of the page to get the tab ID for. Call ${listPages.name} to get available pages.`,
+      ),
+  },
+  handler: async (request, response, context) => {
+    const page = context.getPageById(request.params.pageId);
+    // @ts-expect-error _tabId is internal.
+    const tabId = page._tabId;
+    response.setTabId(tabId);
   },
 });
