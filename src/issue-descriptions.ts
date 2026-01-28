@@ -9,7 +9,7 @@ import * as path from 'node:path';
 
 const DESCRIPTIONS_PATH = path.join(
   import.meta.dirname,
-  '../node_modules/chrome-devtools-frontend/front_end/models/issues_manager/descriptions',
+  'third_party/issue-descriptions',
 );
 
 let issueDescriptions: Record<string, string> = {};
@@ -47,3 +47,8 @@ export async function loadIssueDescriptions(): Promise<void> {
 export function getIssueDescription(fileName: string): string | null {
   return issueDescriptions[fileName] ?? null;
 }
+
+export const ISSUE_UTILS = {
+  loadIssueDescriptions,
+  getIssueDescription,
+};
