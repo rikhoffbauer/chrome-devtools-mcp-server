@@ -3,6 +3,7 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
+
 import fs from 'node:fs';
 
 import {debug} from './third_party/index.js';
@@ -28,6 +29,19 @@ export function saveLogsToFile(fileName: string): fs.WriteStream {
     process.exit(1);
   });
   return logFile;
+}
+
+export function flushLogs(
+  logFile: fs.WriteStream,
+  timeoutMs = 2000,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(reject, timeoutMs);
+    logFile.end(() => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
 }
 
 export const logger = debug(mcpDebugNamespace);

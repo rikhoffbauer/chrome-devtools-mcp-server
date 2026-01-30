@@ -8,10 +8,23 @@ import type {YargsOptions} from './third_party/index.js';
 import {yargs, hideBin} from './third_party/index.js';
 
 export const cliOptions = {
+  autoConnect: {
+    type: 'boolean',
+    description:
+      'If specified, automatically connects to a browser (Chrome 144+) running in the user data directory identified by the channel param. Requires the remoted debugging server to be started in the Chrome instance via chrome://inspect/#remote-debugging.',
+    conflicts: ['isolated', 'executablePath'],
+    default: false,
+    coerce: (value: boolean | undefined) => {
+      if (!value) {
+        return;
+      }
+      return value;
+    },
+  },
   browserUrl: {
     type: 'string',
     description:
-      'Connect to a running Chrome instance using port forwarding. For more details see: https://developer.chrome.com/docs/devtools/remote-debugging/local-server.',
+      'Connect to a running, debuggable Chrome instance (e.g. `http://127.0.0.1:9222`). For more details see: https://github.com/ChromeDevTools/chrome-devtools-mcp#connecting-to-a-running-chrome-instance.',
     alias: 'u',
     conflicts: 'wsEndpoint',
     coerce: (url: string | undefined) => {
@@ -88,8 +101,13 @@ export const cliOptions = {
   isolated: {
     type: 'boolean',
     description:
-      'If specified, creates a temporary user-data-dir that is automatically cleaned up after the browser is closed.',
-    default: false,
+      'If specified, creates a temporary user-data-dir that is automatically cleaned up after the browser is closed. Defaults to false.',
+  },
+  userDataDir: {
+    type: 'string',
+    description:
+      'Path to the user data directory for Chrome. Default is $HOME/.cache/chrome-devtools-mcp/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE',
+    conflicts: ['browserUrl', 'wsEndpoint', 'isolated'],
   },
   channel: {
     type: 'string',
@@ -134,16 +152,36 @@ export const cliOptions = {
     describe: 'Whether to enable automation over DevTools targets',
     hidden: true,
   },
+  experimentalVision: {
+    type: 'boolean',
+    describe: 'Whether to enable vision tools',
+    hidden: true,
+  },
+  experimentalStructuredContent: {
+    type: 'boolean',
+    describe: 'Whether to output structured formatted content.',
+    hidden: true,
+  },
   experimentalIncludeAllPages: {
     type: 'boolean',
     describe:
       'Whether to include all kinds of pages such as webviews or background pages as pages.',
     hidden: true,
   },
+  experimentalInteropTools: {
+    type: 'boolean',
+    describe: 'Whether to enable interoperability tools',
+    hidden: true,
+  },
   chromeArg: {
     type: 'array',
     describe:
       'Additional arguments for Chrome. Only applies when Chrome is launched by chrome-devtools-mcp.',
+  },
+  ignoreDefaultChromeArg: {
+    type: 'array',
+    describe:
+      'Explicitly disable default arguments for Chrome. Only applies when Chrome is launched by chrome-devtools-mcp.',
   },
   categoryEmulation: {
     type: 'boolean',
@@ -159,6 +197,33 @@ export const cliOptions = {
     type: 'boolean',
     default: true,
     describe: 'Set to false to exclude tools related to network.',
+  },
+  categoryExtensions: {
+    type: 'boolean',
+    default: false,
+    hidden: true,
+    describe: 'Set to false to exclude tools related to extensions.',
+  },
+  usageStatistics: {
+    type: 'boolean',
+    default: true,
+    describe:
+      'Set to false to opt-out of usage statistics collection. Google collects usage data to improve the tool, handled under the Google Privacy Policy (https://policies.google.com/privacy). This is independent from Chrome browser metrics. Disabled if CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS or CI env variables are set.',
+  },
+  clearcutEndpoint: {
+    type: 'string',
+    hidden: true,
+    describe: 'Endpoint for Clearcut telemetry.',
+  },
+  clearcutForceFlushIntervalMs: {
+    type: 'number',
+    hidden: true,
+    describe: 'Force flush interval in milliseconds (for testing).',
+  },
+  clearcutIncludePidHeader: {
+    type: 'boolean',
+    hidden: true,
+    describe: 'Include watchdog PID in Clearcut request headers (for testing).',
   },
 } satisfies Record<string, YargsOptions>;
 
@@ -206,12 +271,32 @@ export function parseArguments(version: string, argv = process.argv) {
         `$0 --chrome-arg='--no-sandbox' --chrome-arg='--disable-setuid-sandbox'`,
         'Launch Chrome without sandboxes. Use with caution.',
       ],
+      [
+        `$0 --ignore-default-chrome-arg='--disable-extensions'`,
+        'Disable the default arguments provided by Puppeteer. Use with caution.',
+      ],
       ['$0 --no-category-emulation', 'Disable tools in the emulation category'],
       [
         '$0 --no-category-performance',
         'Disable tools in the performance category',
       ],
       ['$0 --no-category-network', 'Disable tools in the network category'],
+      [
+        '$0 --user-data-dir=/tmp/user-data-dir',
+        'Use a custom user data directory',
+      ],
+      [
+        '$0 --auto-connect',
+        'Connect to a stable Chrome instance (Chrome 144+) running instead of launching a new instance',
+      ],
+      [
+        '$0 --auto-connect --channel=canary',
+        'Connect to a canary Chrome instance (Chrome 144+) running instead of launching a new instance',
+      ],
+      [
+        '$0 --no-usage-statistics',
+        'Do not send usage statistics https://github.com/ChromeDevTools/chrome-devtools-mcp#usage-statistics.',
+      ],
     ]);
 
   return yargsInstance

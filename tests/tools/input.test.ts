@@ -3,6 +3,7 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
+
 import assert from 'node:assert';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -16,17 +17,18 @@ import {
   fillForm,
   uploadFile,
   pressKey,
+  clickAt,
 } from '../../src/tools/input.js';
 import {parseKey} from '../../src/utils/keyboard.js';
 import {serverHooks} from '../server.js';
-import {html, withBrowser} from '../utils.js';
+import {html, withMcpContext} from '../utils.js';
 
 describe('input', () => {
   const server = serverHooks();
 
   describe('click', () => {
     it('clicks', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(
           html`<button onclick="this.innerText = 'clicked';">test</button>`,
@@ -50,7 +52,7 @@ describe('input', () => {
       });
     });
     it('double clicks', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(
           html`<button ondblclick="this.innerText = 'dblclicked';"
@@ -88,7 +90,7 @@ describe('input', () => {
         res.end();
       });
 
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.goto(server.getRoute('/link'));
         await context.createTextSnapshot();
@@ -130,7 +132,7 @@ describe('input', () => {
           </script>
         `,
       );
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.goto(server.getRoute('/unstable'));
         await context.createTextSnapshot();
@@ -153,11 +155,60 @@ describe('input', () => {
         assert(handlerResolveTime > buttonChangeTime, 'Waited for navigation');
       });
     });
+
+    it('does not include snapshot by default', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPage();
+        await page.setContent(
+          html`<button onclick="this.innerText = 'clicked';">test</button>`,
+        );
+        await context.createTextSnapshot();
+        await click.handler(
+          {
+            params: {
+              uid: '1_1',
+            },
+          },
+          response,
+          context,
+        );
+        assert.strictEqual(
+          response.responseLines[0],
+          'Successfully clicked on the element',
+        );
+        assert.strictEqual(response.snapshotParams, undefined);
+      });
+    });
+
+    it('includes snapshot if includeSnapshot is true', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPage();
+        await page.setContent(
+          html`<button onclick="this.innerText = 'clicked';">test</button>`,
+        );
+        await context.createTextSnapshot();
+        await click.handler(
+          {
+            params: {
+              uid: '1_1',
+              includeSnapshot: true,
+            },
+          },
+          response,
+          context,
+        );
+        assert.strictEqual(
+          response.responseLines[0],
+          'Successfully clicked on the element',
+        );
+        assert.notStrictEqual(response.snapshotParams, undefined);
+      });
+    });
   });
 
   describe('hover', () => {
     it('hovers', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(
           html`<button onmouseover="this.innerText = 'hovered';">test</button>`,
@@ -182,9 +233,70 @@ describe('input', () => {
     });
   });
 
+  describe('click_at', () => {
+    it('clicks at coordinates', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPage();
+        await page.setContent(
+          html`<div
+            style="width: 100px; height: 100px; background: red;"
+            onclick="this.innerText = 'clicked'"
+          ></div>`,
+        );
+        await context.createTextSnapshot();
+        await clickAt.handler(
+          {
+            params: {
+              x: 50,
+              y: 50,
+            },
+          },
+          response,
+          context,
+        );
+        assert.strictEqual(
+          response.responseLines[0],
+          'Successfully clicked at the coordinates',
+        );
+        assert.ok(response.includeSnapshot);
+        assert.ok(await page.$('text/clicked'));
+      });
+    });
+
+    it('double clicks at coordinates', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPage();
+        await page.setContent(
+          html`<div
+            style="width: 100px; height: 100px; background: red;"
+            ondblclick="this.innerText = 'dblclicked'"
+          ></div>`,
+        );
+        await context.createTextSnapshot();
+        await clickAt.handler(
+          {
+            params: {
+              x: 50,
+              y: 50,
+              dblClick: true,
+            },
+          },
+          response,
+          context,
+        );
+        assert.strictEqual(
+          response.responseLines[0],
+          'Successfully double clicked at the coordinates',
+        );
+        assert.ok(response.includeSnapshot);
+        assert.ok(await page.$('text/dblclicked'));
+      });
+    });
+  });
+
   describe('fill', () => {
     it('fills out an input', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(html`<input />`);
         await context.createTextSnapshot();
@@ -208,7 +320,7 @@ describe('input', () => {
     });
 
     it('fills out a select by text', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(
           html`<select
@@ -238,11 +350,43 @@ describe('input', () => {
         assert.strictEqual(selectedValue, 'v2');
       });
     });
+
+    it('fills out a textarea with long text', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPage();
+        await page.setContent(html`<textarea />`);
+        await page.focus('textarea');
+        await context.createTextSnapshot();
+        await page.setDefaultTimeout(1000);
+        await fill.handler(
+          {
+            params: {
+              uid: '1_1',
+              value: '1'.repeat(3000),
+            },
+          },
+          response,
+          context,
+        );
+        assert.strictEqual(
+          response.responseLines[0],
+          'Successfully filled out the element',
+        );
+        assert.ok(response.includeSnapshot);
+        assert.ok(
+          await page.evaluate(() => {
+            return (
+              document.body.querySelector('textarea')?.value.length === 3_000
+            );
+          }),
+        );
+      });
+    });
   });
 
   describe('drags', () => {
     it('drags one element onto another', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(
           html`<div
@@ -296,7 +440,7 @@ describe('input', () => {
 
   describe('fill form', () => {
     it('successfully fills out the form', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(
           html`<form>
@@ -360,7 +504,7 @@ describe('input', () => {
       const testFilePath = path.join(process.cwd(), 'test.txt');
       await fs.writeFile(testFilePath, 'test file content');
 
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(
           html`<form>
@@ -395,7 +539,7 @@ describe('input', () => {
       const testFilePath = path.join(process.cwd(), 'test.txt');
       await fs.writeFile(testFilePath, 'test file content');
 
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(
           html`<button id="file-chooser-button">Upload file</button>
@@ -442,7 +586,7 @@ describe('input', () => {
       const testFilePath = path.join(process.cwd(), 'test.txt');
       await fs.writeFile(testFilePath, 'test file content');
 
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(html`<div>Not a file input</div>`);
         await context.createTextSnapshot();
@@ -501,7 +645,7 @@ describe('input', () => {
     });
 
     it('processes press_key', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = context.getSelectedPage();
         await page.setContent(
           html`<script>

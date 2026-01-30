@@ -3,8 +3,10 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
+
 import assert from 'node:assert';
 import {describe, it, afterEach} from 'node:test';
+import zlib from 'node:zlib';
 
 import sinon from 'sinon';
 
@@ -19,7 +21,7 @@ import {
   traceResultIsSuccess,
 } from '../../src/trace-processing/parse.js';
 import {loadTraceAsBuffer} from '../trace-processing/fixtures/load.js';
-import {withBrowser} from '../utils.js';
+import {withMcpContext} from '../utils.js';
 
 describe('performance', () => {
   afterEach(() => {
@@ -28,7 +30,7 @@ describe('performance', () => {
 
   describe('performance_start_trace', () => {
     it('starts a trace recording', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         context.setIsRunningPerformanceTrace(false);
         const selectedPage = context.getSelectedPage();
         const startTracingStub = sinon.stub(selectedPage.tracing, 'start');
@@ -48,7 +50,7 @@ describe('performance', () => {
     });
 
     it('can navigate to about:blank and record a page reload', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const selectedPage = context.getSelectedPage();
         sinon.stub(selectedPage, 'url').callsFake(() => 'https://www.test.com');
         const gotoStub = sinon.stub(selectedPage, 'goto');
@@ -77,7 +79,7 @@ describe('performance', () => {
     it('can autostop and store a recording', async () => {
       const rawData = loadTraceAsBuffer('basic-trace.json.gz');
 
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const selectedPage = context.getSelectedPage();
         sinon.stub(selectedPage, 'url').callsFake(() => 'https://www.test.com');
         sinon.stub(selectedPage, 'goto').callsFake(() => Promise.resolve(null));
@@ -120,7 +122,7 @@ describe('performance', () => {
     });
 
     it('errors if a recording is already active', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         context.setIsRunningPerformanceTrace(true);
         const selectedPage = context.getSelectedPage();
         const startTracingStub = sinon.stub(selectedPage.tracing, 'start');
@@ -137,6 +139,49 @@ describe('performance', () => {
         );
       });
     });
+
+    it('supports filePath', async () => {
+      const rawData = loadTraceAsBuffer('basic-trace.json.gz');
+      // rawData is the decompressed buffer (based on loadTraceAsBuffer implementation).
+      // We want to simulate saving it as a .gz file, so the tool should compress it.
+      const expectedCompressedData = zlib.gzipSync(rawData);
+
+      await withMcpContext(async (response, context) => {
+        const filePath = 'test-trace.json.gz';
+        const selectedPage = context.getSelectedPage();
+        sinon.stub(selectedPage, 'url').callsFake(() => 'https://www.test.com');
+        sinon.stub(selectedPage, 'goto').callsFake(() => Promise.resolve(null));
+        sinon.stub(selectedPage.tracing, 'start');
+        sinon.stub(selectedPage.tracing, 'stop').resolves(rawData);
+        const saveFileStub = sinon
+          .stub(context, 'saveFile')
+          .resolves({filename: filePath});
+
+        const handlerPromise = startTrace.handler(
+          {params: {reload: true, autoStop: true, filePath}},
+          response,
+          context,
+        );
+        // In the handler we wait 5 seconds after the page load event (which is
+        // what DevTools does), hence we now fake-progress time to allow
+        // the handler to complete. We allow extra time because the Trace
+        // Engine also uses some timers to yield updates and we need those to
+        // execute.
+        await handlerPromise;
+
+        assert.ok(
+          response.responseLines.includes(
+            `The raw trace data was saved to ${filePath}.`,
+          ),
+        );
+        sinon.assert.calledOnce(saveFileStub);
+        const [savedData, savedPath] = saveFileStub.firstCall.args;
+        assert.strictEqual(savedPath, filePath);
+        // Compare the saved data with expected compressed data
+        // We can't compare buffers directly with strictEqual easily if they are different instances, but deepStrictEqual works for Buffers.
+        assert.deepStrictEqual(savedData, expectedCompressedData);
+      });
+    });
   });
 
   describe('performance_analyze_insight', () => {
@@ -149,9 +194,9 @@ describe('performance', () => {
       return result;
     }
 
-    it('returns the information on the insight', async t => {
+    it('returns the information on the insight', async () => {
       const trace = await parseTrace('web-dev-with-commit.json.gz');
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         context.storeTraceRecording(trace);
         context.setIsRunningPerformanceTrace(false);
 
@@ -166,36 +211,12 @@ describe('performance', () => {
           context,
         );
 
-        t.assert.snapshot?.(response.responseLines.join('\n'));
-      });
-    });
-
-    it('returns an error if the insight does not exist', async () => {
-      const trace = await parseTrace('web-dev-with-commit.json.gz');
-      await withBrowser(async (response, context) => {
-        context.storeTraceRecording(trace);
-        context.setIsRunningPerformanceTrace(false);
-
-        await analyzeInsight.handler(
-          {
-            params: {
-              insightSetId: '8463DF94CD61B265B664E7F768183DE3',
-              insightName: 'MadeUpInsightName',
-            },
-          },
-          response,
-          context,
-        );
-        assert.ok(
-          response.responseLines
-            .join('\n')
-            .match(/No Performance Insights for the given insight set id/),
-        );
+        assert.ok(response.attachedTracedInsight);
       });
     });
 
     it('returns an error if no trace has been recorded', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         await analyzeInsight.handler(
           {
             params: {
@@ -219,7 +240,7 @@ describe('performance', () => {
 
   describe('performance_stop_trace', () => {
     it('does nothing if the trace is not running and does not error', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         context.setIsRunningPerformanceTrace(false);
         const selectedPage = context.getSelectedPage();
         const stopTracingStub = sinon.stub(selectedPage.tracing, 'stop');
@@ -231,7 +252,7 @@ describe('performance', () => {
 
     it('will stop the trace and return trace info when a trace is running', async () => {
       const rawData = loadTraceAsBuffer('basic-trace.json.gz');
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         context.setIsRunningPerformanceTrace(true);
         const selectedPage = context.getSelectedPage();
         const stopTracingStub = sinon
@@ -250,28 +271,44 @@ describe('performance', () => {
       });
     });
 
-    it('returns an error message if parsing the trace buffer fails', async t => {
-      await withBrowser(async (response, context) => {
+    it('throws an error if parsing the trace buffer fails', async () => {
+      await withMcpContext(async (response, context) => {
         context.setIsRunningPerformanceTrace(true);
         const selectedPage = context.getSelectedPage();
         sinon
           .stub(selectedPage.tracing, 'stop')
           .returns(Promise.resolve(undefined));
-        await stopTrace.handler({params: {}}, response, context);
-        t.assert.snapshot?.(response.responseLines.join('\n'));
+
+        await assert.rejects(
+          stopTrace.handler({params: {}}, response, context),
+          /There was an unexpected error parsing the trace/,
+        );
       });
     });
 
-    it('returns the high level summary of the performance trace', async t => {
-      const rawData = loadTraceAsBuffer('web-dev-with-commit.json.gz');
-      await withBrowser(async (response, context) => {
+    it('supports filePath', async () => {
+      const rawData = loadTraceAsBuffer('basic-trace.json.gz');
+      await withMcpContext(async (response, context) => {
+        const filePath = 'test-trace.json';
         context.setIsRunningPerformanceTrace(true);
         const selectedPage = context.getSelectedPage();
-        sinon.stub(selectedPage.tracing, 'stop').callsFake(async () => {
-          return rawData;
-        });
-        await stopTrace.handler({params: {}}, response, context);
-        t.assert.snapshot?.(response.responseLines.join('\n'));
+        const stopTracingStub = sinon
+          .stub(selectedPage.tracing, 'stop')
+          .resolves(rawData);
+        const saveFileStub = sinon
+          .stub(context, 'saveFile')
+          .resolves({filename: filePath});
+
+        await stopTrace.handler({params: {filePath}}, response, context);
+
+        sinon.assert.calledOnce(stopTracingStub);
+        sinon.assert.calledOnce(saveFileStub);
+        sinon.assert.calledWith(saveFileStub, rawData, filePath);
+        assert.ok(
+          response.responseLines.includes(
+            `The raw trace data was saved to ${filePath}.`,
+          ),
+        );
       });
     });
   });

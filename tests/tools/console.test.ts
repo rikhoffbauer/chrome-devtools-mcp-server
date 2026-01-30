@@ -3,67 +3,59 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-import assert from 'node:assert';
-import {afterEach, before, beforeEach, describe, it} from 'node:test';
 
-import {setIssuesEnabled} from '../../src/features.js';
+import assert from 'node:assert';
+import {before, describe, it} from 'node:test';
+
 import {loadIssueDescriptions} from '../../src/issue-descriptions.js';
+import {McpResponse} from '../../src/McpResponse.js';
+import {DevTools} from '../../src/third_party/index.js';
 import {
   getConsoleMessage,
   listConsoleMessages,
 } from '../../src/tools/console.js';
-import {withBrowser} from '../utils.js';
+import {serverHooks} from '../server.js';
+import {getTextContent, withMcpContext} from '../utils.js';
 
 describe('console', () => {
+  before(async () => {
+    await loadIssueDescriptions();
+  });
   describe('list_console_messages', () => {
-    before(async () => {
-      await loadIssueDescriptions();
-    });
-
     it('list messages', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         await listConsoleMessages.handler({params: {}}, response, context);
         assert.ok(response.includeConsoleData);
       });
     });
 
     it('lists error messages', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = await context.newPage();
         await page.setContent(
           '<script>console.error("This is an error")</script>',
         );
         await listConsoleMessages.handler({params: {}}, response, context);
         const formattedResponse = await response.handle('test', context);
-        const textContent = formattedResponse[0] as {text: string};
-        assert.ok(
-          textContent.text.includes('msgid=1 [error] This is an error'),
-        );
+        const textContent = getTextContent(formattedResponse.content[0]);
+        assert.ok(textContent.includes('msgid=1 [error] This is an error'));
       });
     });
 
     it('work with primitive unhandled errors', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = await context.newPage();
         await page.setContent('<script>throw undefined;</script>');
         await listConsoleMessages.handler({params: {}}, response, context);
         const formattedResponse = await response.handle('test', context);
-        const textContent = formattedResponse[0] as {text: string};
-        assert.ok(
-          textContent.text.includes('msgid=1 [error] undefined (0 args)'),
-        );
+        const textContent = getTextContent(formattedResponse.content[0]);
+        assert.ok(textContent.includes('msgid=1 [error] undefined (0 args)'));
       });
     });
 
     describe('issues', () => {
-      beforeEach(() => {
-        setIssuesEnabled(true);
-      });
-      afterEach(() => {
-        setIssuesEnabled(false);
-      });
       it('lists issues', async () => {
-        await withBrowser(async (response, context) => {
+        await withMcpContext(async (response, context) => {
           const page = await context.newPage();
           const issuePromise = new Promise<void>(resolve => {
             page.once('issue', () => {
@@ -74,9 +66,9 @@ describe('console', () => {
           await issuePromise;
           await listConsoleMessages.handler({params: {}}, response, context);
           const formattedResponse = await response.handle('test', context);
-          const textContent = formattedResponse[0] as {text: string};
+          const textContent = getTextContent(formattedResponse.content[0]);
           assert.ok(
-            textContent.text.includes(
+            textContent.includes(
               `msgid=1 [issue] An element doesn't have an autocomplete attribute (count: 1)`,
             ),
           );
@@ -84,7 +76,7 @@ describe('console', () => {
       });
 
       it('lists issues after a page reload', async () => {
-        await withBrowser(async (response, context) => {
+        await withMcpContext(async (response, context) => {
           const page = await context.newPage();
           const issuePromise = new Promise<void>(resolve => {
             page.once('issue', () => {
@@ -97,9 +89,9 @@ describe('console', () => {
           await listConsoleMessages.handler({params: {}}, response, context);
           {
             const formattedResponse = await response.handle('test', context);
-            const textContent = formattedResponse[0] as {text: string};
+            const textContent = getTextContent(formattedResponse.content[0]);
             assert.ok(
-              textContent.text.includes(
+              textContent.includes(
                 `msgid=1 [issue] An element doesn't have an autocomplete attribute (count: 1)`,
               ),
             );
@@ -115,9 +107,9 @@ describe('console', () => {
           await anotherIssuePromise;
           {
             const formattedResponse = await response.handle('test', context);
-            const textContent = formattedResponse[0] as {text: string};
+            const textContent = getTextContent(formattedResponse.content[0]);
             assert.ok(
-              textContent.text.includes(
+              textContent.includes(
                 `msgid=2 [issue] An element doesn't have an autocomplete attribute (count: 1)`,
               ),
             );
@@ -128,8 +120,10 @@ describe('console', () => {
   });
 
   describe('get_console_message', () => {
+    const server = serverHooks();
+
     it('gets a specific console message', async () => {
-      await withBrowser(async (response, context) => {
+      await withMcpContext(async (response, context) => {
         const page = await context.newPage();
         await page.setContent(
           '<script>console.error("This is an error")</script>',
@@ -142,11 +136,125 @@ describe('console', () => {
           context,
         );
         const formattedResponse = await response.handle('test', context);
-        const textContent = formattedResponse[0] as {text: string};
+        const textContent = getTextContent(formattedResponse.content[0]);
         assert.ok(
-          textContent.text.includes('msgid=1 [error] This is an error'),
+          textContent.includes('msgid=1 [error] This is an error'),
           'Should contain console message body',
         );
+      });
+    });
+
+    describe('issues type', () => {
+      it('gets issue details with node id parsing', async t => {
+        await withMcpContext(async (response, context) => {
+          const page = await context.newPage();
+          const issuePromise = new Promise<void>(resolve => {
+            page.once('issue', () => {
+              resolve();
+            });
+          });
+          await page.setContent('<input type="text" name="username" />');
+          await context.createTextSnapshot();
+          await issuePromise;
+          await listConsoleMessages.handler({params: {}}, response, context);
+          const response2 = new McpResponse();
+          await getConsoleMessage.handler(
+            {params: {msgid: 1}},
+            response2,
+            context,
+          );
+          const formattedResponse = await response2.handle('test', context);
+          t.assert.snapshot?.(getTextContent(formattedResponse.content[0]));
+        });
+      });
+      it('gets issue details with request id parsing', async t => {
+        server.addRoute('/data.json', (_req, res) => {
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          res.end(JSON.stringify({data: 'test data'}));
+        });
+
+        await withMcpContext(async (response, context) => {
+          const page = await context.newPage();
+          const issuePromise = new Promise<void>(resolve => {
+            page.once('issue', () => {
+              resolve();
+            });
+          });
+
+          const url = server.getRoute('/data.json');
+          await page.setContent(`
+            <script>
+              fetch('${url}', {
+                  method: 'GET',
+                  headers: {
+                      'Content-Type': 'application/json',
+                      'X-Custom-Header': 'MyValue'
+                  }
+              });
+            </script>
+          `);
+          await context.createTextSnapshot();
+          await issuePromise;
+          const messages = context.getConsoleData();
+          let issueMsg;
+          for (const message of messages) {
+            if (message instanceof DevTools.AggregatedIssue) {
+              issueMsg = message;
+              break;
+            }
+          }
+          assert.ok(issueMsg);
+          const id = context.getConsoleMessageStableId(issueMsg);
+          assert.ok(id);
+          await listConsoleMessages.handler(
+            {params: {types: ['issue']}},
+            response,
+            context,
+          );
+          const response2 = new McpResponse();
+          await getConsoleMessage.handler(
+            {params: {msgid: id}},
+            response2,
+            context,
+          );
+          const formattedResponse = await response2.handle('test', context);
+          const rawText = getTextContent(formattedResponse.content[0]);
+          const sanitizedText = rawText
+            .replaceAll(/ID: \d+/g, 'ID: <ID>')
+            .replaceAll(/reqid=\d+/g, 'reqid=<reqid>')
+            .replaceAll(/localhost:\d+/g, 'hostname:port');
+          t.assert.snapshot?.(sanitizedText);
+        });
+      });
+    });
+
+    it('applies source maps to stack traces of console messages', async t => {
+      server.addRoute('/main.min.js', (_req, res) => {
+        res.setHeader('Content-Type', 'text/javascript');
+        res.statusCode = 200;
+        res.end(`function n(){console.warn("hello world")}function o(){n()}(function n(){o()})();
+          //# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJuYW1lcyI6WyJiYXIiLCJjb25zb2xlIiwid2FybiIsImZvbyIsIklpZmUiXSwic291cmNlcyI6WyIuL21haW4uanMiXSwic291cmNlc0NvbnRlbnQiOlsiXG5mdW5jdGlvbiBiYXIoKSB7XG4gIGNvbnNvbGUud2FybignaGVsbG8gd29ybGQnKTtcbn1cblxuZnVuY3Rpb24gZm9vKCkge1xuICBiYXIoKTtcbn1cblxuKGZ1bmN0aW9uIElpZmUoKSB7XG4gIGZvbygpO1xufSkoKTtcblxuIl0sIm1hcHBpbmdzIjoiQUFDQSxTQUFTQSxJQUNQQyxRQUFRQyxLQUFLLGNBQ2YsQ0FFQSxTQUFTQyxJQUNQSCxHQUNGLEVBRUEsU0FBVUksSUFDUkQsR0FDRCxFQUZEIiwiaWdub3JlTGlzdCI6W119
+          `);
+      });
+      server.addHtmlRoute(
+        '/index.html',
+        `<script src="${server.getRoute('/main.min.js')}"></script>`,
+      );
+
+      await withMcpContext(async (response, context) => {
+        const page = await context.newPage();
+        await page.goto(server.getRoute('/index.html'));
+
+        await getConsoleMessage.handler(
+          {params: {msgid: 1}},
+          response,
+          context,
+        );
+        const formattedResponse = await response.handle('test', context);
+        const rawText = getTextContent(formattedResponse.content[0]);
+
+        t.assert.snapshot?.(rawText);
       });
     });
   });
